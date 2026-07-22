@@ -1,0 +1,6 @@
+{
+  "name": "Epe Premier League",
+  "description": "Localized football live updates, standings, lineups, match events, stats, and match administration for the Epe Premier League.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
