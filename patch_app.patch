@@ -1,0 +1,28 @@
+--- src/App.tsx
++++ src/App.tsx
+@@ -535,6 +535,11 @@
+                   teams={teams}
+                 />
+               )}
++
++              {/* TAB 7: POTM */}
++              {activeTab === 'potm' && (
++                <PotmFeed />
++              )}
+ 
+               {/* TAB 6: FANTASY LEAGUE */}
+               {activeTab === 'fantasy' && (
+@@ -647,6 +652,13 @@
+             <span className={`font-bold tracking-wide transition-all ${activeTab === 'cup' ? 'text-[11px]' : 'text-[10px]'}`}>Cup</span>
+           </button>
+           <button
++            onClick={() => setActiveTab('potm')}
++            className={`flex flex-col items-center justify-center gap-1 min-w-[64px] py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'potm' ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
++          >
++            <Star className={`transition-all ${activeTab === 'potm' ? 'w-6 h-6' : 'w-5 h-5'}`} />
++            <span className={`font-bold tracking-wide transition-all ${activeTab === 'potm' ? 'text-[11px]' : 'text-[10px]'}`}>POTM</span>
++          </button>
++          <button
+             onClick={() => setActiveTab('fantasy')}
+             className={`flex flex-col items-center justify-center gap-1 min-w-[64px] py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'fantasy' ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+           >

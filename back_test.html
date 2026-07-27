@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h1>Back Test</h1>
+  <button id="modalBtn">Open Modal</button>
+  <button id="closeBtn">Close Modal</button>
+  <div id="status">No Modal</div>
+
+  <script>
+    let isModalOpen = false;
+    
+    // Initial dummy state
+    window.history.pushState(null, '', window.location.href);
+
+    window.addEventListener('popstate', (e) => {
+      console.log('popstate fired, isModalOpen=', isModalOpen);
+      if (isModalOpen) {
+        isModalOpen = false;
+        document.getElementById('status').innerText = 'No Modal (Closed by Back)';
+        window.history.pushState(null, '', window.location.href);
+      } else {
+        document.getElementById('status').innerText = 'Exiting...';
+        // Let it exit
+      }
+    });
+
+    document.getElementById('modalBtn').addEventListener('click', () => {
+      isModalOpen = true;
+      document.getElementById('status').innerText = 'Modal Open';
+    });
+    
+    document.getElementById('closeBtn').addEventListener('click', () => {
+      isModalOpen = false;
+      document.getElementById('status').innerText = 'No Modal (Closed by UI)';
+    });
+  </script>
+</body>
+</html>

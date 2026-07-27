@@ -1,0 +1,36 @@
+{
+  "message": {
+    "topic": "epe_league_updates",
+    "notification": {
+      "title": "⚽ GOAL ALERT: Epe Club Scores!",
+      "body": "Thunderous strike from 25 yards out into the top corner!"
+    },
+    "android": {
+      "notification": {
+        "sound": "epe_alert",
+        "channel_id": "epe_custom_alerts",
+        "click_action": "FLUTTER_NOTIFICATION_CLICK"
+      }
+    },
+    "apns": {
+      "payload": {
+        "aps": {
+          "sound": "epe_alert.mp3"
+        }
+      }
+    },
+    "webpush": {
+      "headers": {
+        "Urgency": "high"
+      },
+      "notification": {
+        "silent": true,
+        "icon": "https://example.com/logo.png"
+      },
+      "data": {
+        "custom_sound": "epe_alert.mp3",
+        "action_url": "/matches"
+      }
+    }
+  }
+}

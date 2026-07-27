@@ -1,7 +1,7 @@
 import React from 'react';
 import { Match } from '../types';
 import { MapPin, Clock } from 'lucide-react';
-import { formatMatchDisplayTime } from '../utils/matchClock';
+import { useMatchClock } from '../utils/matchClock';
 
 interface MatchCardProps {
   match: Match;
@@ -10,16 +10,11 @@ interface MatchCardProps {
 }
 
 export const MatchCard: React.FC<MatchCardProps> = ({ match, onClick, selectedMatchId }) => {
-  const isLive = match.status === 'Live';
-  const isFullTime = match.status === 'Full-Time';
+  const isLive = match.status === 'Live' || match.period === '1st Half' || match.period === '2nd Half';
+  const isFullTime = match.status === 'Full-Time' || match.period === 'Full-Time';
   const isSelected = selectedMatchId === match.id;
 
-  const clock = formatMatchDisplayTime(
-    match.matchMinute,
-    match.period,
-    match.stoppageTime1stHalf,
-    match.stoppageTime2ndHalf
-  );
+  const clock = useMatchClock(match);
 
   return (
     <div
@@ -41,7 +36,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({ match, onClick, selectedMa
         {isLive ? (
           <div className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] border ${clock.badgeColor}`}>
             <span className="w-2 h-2 rounded-full bg-red-400 animate-ping"></span>
-            <span>{clock.displayString} LIVE</span>
+            <span>{clock.displayString} {clock.overflowText ? clock.overflowText : ''} LIVE</span>
           </div>
         ) : isFullTime ? (
           <span className="bg-slate-800 text-slate-300 font-bold px-2 py-0.5 rounded-md text-[11px] border border-slate-700">
@@ -50,7 +45,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({ match, onClick, selectedMa
         ) : (
           <span className="flex items-center gap-1 text-slate-400 font-medium text-[11px]">
             <Clock className="w-3 h-3 text-slate-500" />
-            {match.time}
+            {match.time} WAT
           </span>
         )}
       </div>
@@ -68,7 +63,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({ match, onClick, selectedMa
                 (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=120&q=80';
               }}
             />
-            <span className="font-bold text-slate-100 text-sm truncate">
+            <span className="font-bold text-slate-100 text-[13px] leading-tight break-words max-w-[80px] text-center">
               {match.homeTeam?.name || 'Home Team'}
             </span>
           </div>
@@ -90,7 +85,7 @@ export const MatchCard: React.FC<MatchCardProps> = ({ match, onClick, selectedMa
                 (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=120&q=80';
               }}
             />
-            <span className="font-bold text-slate-100 text-sm truncate">
+            <span className="font-bold text-slate-100 text-[13px] leading-tight break-words max-w-[80px] text-center">
               {match.awayTeam?.name || 'Away Team'}
             </span>
           </div>

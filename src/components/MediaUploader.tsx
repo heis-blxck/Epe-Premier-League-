@@ -7,18 +7,22 @@ interface MediaUploaderProps {
   onSelectUrl?: (url: string) => void;
   label?: string;
   presetCategory?: 'app_icon' | 'team_crest' | 'player_photo' | 'coach_photo' | 'article_cover';
+  onErrorToast?: (msg: string) => void;
+  accept?: string;
 }
 
-export const MediaUploader: React.FC<MediaUploaderProps> = ({
+export const MediaUploader: React.FC<MediaUploaderProps> = ({ accept = "image/*",
   currentUrl,
   onMediaSelect,
   onSelectUrl,
   label = 'Upload Image / Media',
-  presetCategory = 'team_crest'
+  presetCategory = 'team_crest',
+  onErrorToast
 }) => {
   const [activeTab, setActiveTab] = useState<'upload' | 'url' | 'presets'>('upload');
   const [urlInput, setUrlInput] = useState(currentUrl || '');
   const [previewUrl, setPreviewUrl] = useState(currentUrl || '');
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const notify = (url: string) => {
@@ -64,6 +68,20 @@ export const MediaUploader: React.FC<MediaUploaderProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      const MAX_BYTES = 2 * 1024 * 1024; // 2MB Limit
+      if (file.size > MAX_BYTES) {
+        const msg = 'File exceeds 2MB limit. Please compress and try again.';
+        setUploadError(msg);
+        if (onErrorToast) {
+          onErrorToast(msg);
+        } else {
+          alert(msg);
+        }
+        if (e.target) e.target.value = '';
+        return;
+      }
+
+      setUploadError(null);
       const reader = new FileReader();
       reader.onload = (uploadEvent) => {
         const resultUrl = uploadEvent.target?.result as string;
@@ -103,6 +121,12 @@ export const MediaUploader: React.FC<MediaUploaderProps> = ({
           </span>
         )}
       </div>
+
+      {uploadError && (
+        <div className="bg-rose-950 border border-rose-700 text-rose-200 text-xs font-bold p-2.5 rounded-xl flex items-center gap-2">
+          <span>⚠️ {uploadError}</span>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
@@ -172,7 +196,7 @@ export const MediaUploader: React.FC<MediaUploaderProps> = ({
             type="file"
             ref={fileInputRef}
             onChange={handleFileChange}
-            accept="image/*"
+            accept={accept}
             className="hidden"
           />
           <div className="w-10 h-10 rounded-full bg-slate-800 text-amber-400 mx-auto flex items-center justify-center">

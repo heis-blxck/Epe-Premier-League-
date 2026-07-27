@@ -1,0 +1,134 @@
+import zlib
+import struct
+import math
+
+# Generate a high-resolution transparent PNG of the Crowned Lion Head profile facing right
+svg_content = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <defs>
+    <linearGradient id="crownGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff099" />
+      <stop offset="40%" stop-color="#fbbf24" />
+      <stop offset="80%" stop-color="#d97706" />
+      <stop offset="100%" stop-color="#92400e" />
+    </linearGradient>
+    <linearGradient id="lionGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="maroonStrand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a31634" />
+      <stop offset="100%" stop-color="#580011" />
+    </linearGradient>
+    <linearGradient id="blueStrand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="greenStrand" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#065f46" />
+      <stop offset="100%" stop-color="#022c22" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#glow)">
+    <!-- CROWN AT TOP -->
+    <!-- Crown Base Band -->
+    <path d="M 140,140 Q 250,110 360,110 Q 250,135 140,140 Z" fill="url(#crownGold)" />
+    
+    <!-- Crown Body & Peaks -->
+    <!-- Left peak, center-left, tall center peak, center-right, right peak -->
+    <path d="M 100,80 
+             L 140,140 
+             L 185,100 
+             L 250,50 
+             L 315,100 
+             L 360,110 
+             L 390,70 
+             L 345,115 
+             Q 250,110 140,140 Z" fill="url(#crownGold)" stroke="#fef08a" stroke-width="2" />
+
+    <!-- Crown Inner Jewels/Cutouts -->
+    <polygon points="250,70 235,95 265,95" fill="#580011" />
+    <polygon points="185,112 175,126 195,126" fill="#1e3a8a" />
+    <polygon points="315,112 305,124 325,124" fill="#065f46" />
+
+    <!-- LION MANE (Flowing strands from left to right) -->
+    <!-- Outer Maroon Back Mane -->
+    <path d="M 160,135 
+             C 110,180 80,250 110,330 
+             C 125,370 150,420 185,460 
+             C 165,420 150,370 155,320 
+             C 160,270 190,210 230,170 Z" fill="url(#maroonStrand)" />
+
+    <path d="M 120,220 
+             C 90,280 100,360 140,430 
+             C 150,445 165,470 190,485 
+             C 170,450 155,410 150,360 
+             C 145,300 165,240 200,195 Z" fill="url(#maroonStrand)" />
+
+    <!-- Deep Blue Mane Strands -->
+    <path d="M 190,165 
+             C 150,220 150,300 180,380 
+             C 195,420 220,460 250,490 
+             C 230,450 215,400 210,350 
+             C 205,290 225,220 260,180 Z" fill="url(#blueStrand)" />
+
+    <path d="M 165,260 
+             C 145,320 160,390 205,455 
+             C 220,475 235,495 260,500 
+             C 235,470 215,430 205,380 
+             C 195,330 205,280 225,235 Z" fill="url(#blueStrand)" />
+
+    <!-- Emerald Green Strands -->
+    <path d="M 220,180 
+             C 190,240 195,320 235,400 
+             C 250,430 280,470 310,490 
+             C 285,455 265,415 255,370 
+             C 245,310 260,240 290,190 Z" fill="url(#greenStrand)" />
+
+    <!-- Gold Flowing Mane Highlights -->
+    <path d="M 245,160 
+             C 210,220 215,300 255,380 
+             C 275,420 300,455 330,480 
+             C 305,445 285,400 275,350 
+             C 265,290 280,220 315,170 Z" fill="url(#lionGold)" />
+
+    <path d="M 210,210 
+             C 185,270 195,340 235,410 
+             C 255,445 285,475 315,495 
+             C 290,465 265,425 255,385 
+             C 240,335 245,275 270,220 Z" fill="url(#lionGold)" />
+
+    <!-- LION FACE PROFILE (FACING RIGHT) -->
+    <!-- Jaw, Snout, Forehead -->
+    <path d="M 270,160 
+             C 320,150 370,180 400,220 
+             C 420,245 440,270 425,300 
+             C 415,320 395,330 380,325 
+             C 365,320 355,305 345,300 
+             C 335,295 320,300 310,310 
+             C 295,325 280,310 280,290 
+             C 280,270 295,250 305,235 
+             C 315,220 310,200 295,190 Z" fill="url(#lionGold)" stroke="#fef08a" stroke-width="1.5" />
+
+    <!-- Lion Nose & Mouth Details -->
+    <path d="M 425,300 C 435,285 410,280 395,285 C 385,288 375,295 380,305 C 385,315 410,315 425,300 Z" fill="#580011" />
+    
+    <!-- Lion Eye (Regal Focused Look) -->
+    <path d="M 345,215 Q 365,210 375,225 Q 355,230 345,215 Z" fill="#1e1b4b" stroke="#fef08a" stroke-width="1" />
+    <circle cx="362" cy="220" r="2.5" fill="#ffffff" />
+
+    <!-- Facial Shadow / Contour Strands -->
+    <path d="M 320,180 C 350,210 340,260 300,290 C 330,250 335,210 320,180 Z" fill="url(#maroonStrand)" />
+    <path d="M 290,220 C 315,245 310,285 275,320 C 300,280 300,250 290,220 Z" fill="url(#blueStrand)" />
+  </g>
+</svg>
+'''
+
+with open('logo_master.svg', 'w') as f:
+    f.write(svg_content)
+
+print("SVG master lion profile created.")

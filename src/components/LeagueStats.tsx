@@ -1,73 +1,205 @@
-import React, { useState } from 'react';
-import { LeagueStats as StatsType, Team, Player } from '../types';
-import { Flame, Award, ShieldCheck, User } from 'lucide-react';
+import React, { useState, useEffect } from "react";
+import { LeagueStats as StatsType, Team, Player, PlayerOfTheMonth, Match } from "../types";
+import { api } from "../services/api";
+import { MasterLeaderboardWidget } from "./MasterLeaderboardWidget";
+import { PlayerProfileModal } from './PlayerProfileModal';
+import { Flame, Award, ShieldCheck, Trophy, Star } from "lucide-react";
 
 interface LeagueStatsProps {
+  competition?: "league" | "cup";
   stats: StatsType;
   teams: Team[];
+  matches?: Match[];
+  onSelectPlayer?: (player: Player) => void;
+  players?: Player[];
 }
 
-export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams }) => {
-  const [activeCategory, setActiveCategory] = useState<'goals' | 'assists' | 'cleanSheets'>('goals');
+export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competition = "league", matches = [], onSelectPlayer, players = [] }) => {
+  const [activeCategory, setActiveCategory] = useState<'goals' | 'assists' | 'cleanSheets' | 'topPerformers'>('goals');
+  const [potmList, setPotmList] = useState<PlayerOfTheMonth[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<Player | null>(null);
 
   const teamsMap = new Map<string, Team>(teams.map(t => [t.id, t]));
 
-  const getPlayersList = (): { players: Player[]; label: string; metricName: string } => {
-    if (activeCategory === 'assists') {
-      return { players: stats.topAssists, label: 'Playmaker Award', metricName: 'Assists' };
+  useEffect(() => {
+    api.getPlayerOfTheMonth().then(data => {
+      setPotmList(data || []);
+    }).catch(console.error);
+  }, []);
+
+  const latestPotm = potmList[0];
+
+  const getLeaderboardData = () => {
+    let playersList: Player[] = [];
+    if (competition === "cup") {
+      if (activeCategory === "goals") playersList = stats.cupTopScorers || [];
+      else if (activeCategory === "assists") playersList = stats.cupTopAssists || [];
+      else if (activeCategory === "cleanSheets") playersList = stats.cupCleanSheets || [];
+      else playersList = stats.cupTopPerformers || stats.cupTopScorers || [];
+    } else {
+      if (activeCategory === "goals") playersList = stats.topScorers || [];
+      else if (activeCategory === "assists") playersList = stats.topAssists || [];
+      else if (activeCategory === "cleanSheets") playersList = stats.cleanSheets || [];
+      else playersList = stats.topPerformers || stats.topScorers || [];
     }
-    if (activeCategory === 'cleanSheets') {
-      return { players: stats.cleanSheets, label: 'Golden Glove Award', metricName: 'Clean Sheets' };
-    }
-    return { players: stats.topScorers, label: 'Golden Boot Leaderboard', metricName: 'Goals' };
+
+    return playersList.map(player => {
+      const isCup = competition === 'cup';
+      const g = isCup ? (player.cupGoals || 0) : player.goals;
+      const a = isCup ? (player.cupAssists || 0) : player.assists;
+      const cs = isCup ? (player.cupCleanSheets || 0) : player.cleanSheets;
+      const rating = player.ratingAverage || 6.0;
+
+      let value: number | string = 0;
+      let displaySub = '';
+
+      if (activeCategory === 'topPerformers') {
+        const csPts = (player.position === 'DEF' || player.position === 'GK') ? cs * 5 : (player.position === 'MID' ? cs * 2 : 0);
+        const impactScore = g * 5 + a * 3 + csPts + Math.max(0, (rating - 5.0) * 4);
+        value = Math.round(impactScore);
+        displaySub = `⚽ ${g} Goals | 👟 ${a} Assists | 🛡️ ${cs} CS | ⭐ ${rating.toFixed(2)}`;
+      } else if (activeCategory === 'goals') {
+        value = g;
+        displaySub = `Rating: ${rating.toFixed(2)}`;
+      } else if (activeCategory === 'assists') {
+        value = a;
+        displaySub = `Goals: ${g}`;
+      } else if (activeCategory === 'cleanSheets') {
+        value = cs;
+        displaySub = `Position: ${player.position}`;
+      }
+
+      return {
+        player,
+        value,
+        displaySub
+      };
+    }).sort((x, y) => Number(y.value) - Number(x.value));
   };
 
-  const { players, label, metricName } = getPlayersList();
-  const top3 = players.slice(0, 3);
-  const rest = players.slice(3);
+  const currentData = getLeaderboardData();
+
+  const getTitleAndSubtitle = () => {
+    const compName = competition === 'cup' ? 'Cup' : 'League';
+    if (activeCategory === 'goals') return { title: `${compName} Golden Boot (Top Scorers)`, subtitle: `Leading goalscorers across all ${compName.toLowerCase()} fixtures.` };
+    if (activeCategory === 'assists') return { title: `${compName} Playmaker Award (Top Assists)`, subtitle: `Most assists provided in ${compName.toLowerCase()} fixtures.` };
+    if (activeCategory === 'cleanSheets') return { title: `${compName} Golden Glove (Clean Sheets)`, subtitle: `Goalkeepers and defenders with clean sheets in ${compName.toLowerCase()} fixtures.` };
+    return { title: `${compName} ${competition === 'cup' ? 'Cup Stars' : 'League Stars'}`, subtitle: `Highest impact scores based on goals, assists, clean sheets & ratings.` };
+  };
+
+  const { title, subtitle } = getTitleAndSubtitle();
+  const metricLabel = activeCategory === 'topPerformers' ? 'Impact Score' : activeCategory === 'goals' ? 'Goals' : activeCategory === 'assists' ? 'Assists' : 'Clean Sheets';
+
+  const starsLabel = competition === 'cup' ? 'Cup Stars' : 'League Stars';
 
   return (
     <div className="space-y-6">
+      {competition !== 'cup' && latestPotm && (
+        <div 
+          className="mb-12 w-full max-w-[350px] mx-auto flex flex-col cursor-pointer transition-transform hover:scale-[1.02]"
+          onClick={() => {
+            const player = players.find(p => p.name === latestPotm.playerName);
+            if (player) {
+              setSelectedProfile(player);
+            }
+          }}
+        >
+          {/* Trading Card Container */}
+          <div className="relative bg-gradient-to-br from-[#800020] to-[#3a000c] rounded-[2rem] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.6)] border-2 border-[#a00028] flex flex-col w-full mb-6 relative" style={{ aspectRatio: '2.5 / 3.5' }}>
+            
+            {/* Top Bar */}
+            <div className="p-5 md:p-6 flex justify-between items-start z-20 relative bg-black/20 backdrop-blur-sm border-b border-white/10 shrink-0">
+              <div className="max-w-[75%]">
+                <h2 className="text-2xl md:text-3xl font-black text-white leading-none tracking-tighter drop-shadow-md line-clamp-2">
+                  {latestPotm.playerName}
+                </h2>
+              </div>
+              {latestPotm.teamLogoUrl && (
+                <img src={latestPotm.teamLogoUrl} alt="Team" className="w-10 h-10 md:w-14 md:h-14 object-contain drop-shadow-md z-20 bg-white/10 rounded-full p-1.5 shrink-0" />
+              )}
+            </div>
+
+            {/* Stat Focus & Main Visual */}
+            <div className="flex-1 relative w-full h-full flex min-h-0">
+              {/* Left Column Stats */}
+              <div className="absolute left-5 top-6 z-30 flex flex-col items-start w-28">
+                <div className="text-[9px] font-bold text-slate-300 uppercase tracking-widest mb-1">Average Rating</div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 bg-sky-400"></div>
+                  <span className="text-3xl md:text-4xl font-black text-white leading-none drop-shadow-lg">{latestPotm.score}</span>
+                </div>
+              </div>
+
+              {/* Transparent PNG Cutout */}
+              <img 
+                src={latestPotm.graphicUrl} 
+                className="absolute bottom-0 inset-x-0 h-[105%] w-full object-contain object-bottom drop-shadow-[0_20px_30px_rgba(0,0,0,0.8)] z-20 pointer-events-none" 
+                alt={latestPotm.playerName} 
+              />
+              
+              {/* Background styling elements */}
+              <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-black/0 via-black/10 to-black/40 z-0"></div>
+              
+              {/* Vertical Sidebar Label */}
+              <div className="absolute right-0 top-0 bottom-0 w-10 border-l border-white/10 z-10 flex flex-col items-center justify-center bg-black/10 backdrop-blur-[2px]">
+                <div className="rotate-90 text-[10px] font-black text-amber-400/80 tracking-[0.4em] uppercase whitespace-nowrap drop-shadow-sm">
+                  PLAYER OF THE MONTH • {latestPotm.month}
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Card Footer - Crisp White Container */}
+          {(latestPotm.headline || latestPotm.description) && (
+            <div className="bg-white rounded-[2rem] p-6 shadow-xl">
+              {latestPotm.headline && (
+                <h3 className="text-xl font-black text-slate-900 tracking-tight mb-2">{latestPotm.headline}</h3>
+              )}
+              {latestPotm.description && (
+                <p className="text-slate-600 text-sm leading-relaxed font-medium line-clamp-3">{latestPotm.description}</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Category Toggle Header */}
-      <div className="bg-slate-900/90 rounded-3xl p-4 sm:p-6 shadow-2xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 backdrop-blur-sm">
+      <div className="bg-slate-900/90 rounded-3xl p-4 sm:p-6 shadow-2xl border border-slate-800 flex flex-col xl:flex-row items-center justify-between gap-4 backdrop-blur-sm">
         <div>
-          <h2 className="text-lg font-black text-slate-100 tracking-tight">
-            LEAGUE PLAYER STATS & AWARDS
+          <h2 className="text-lg font-black text-slate-100 tracking-tight uppercase flex items-center gap-2">
+            {competition === 'cup' ? 'Cup Player Stats & Awards' : 'League Player Stats & Awards'}
           </h2>
-          <p className="text-xs text-slate-400 font-medium">
-            Individual Performance Rankings & Leaders
-          </p>
         </div>
 
         {/* Tab Pills */}
-        <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl w-full sm:w-auto border border-slate-800">
+        <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl w-full xl:w-auto border border-slate-800 flex-wrap sm:flex-nowrap">
           <button
             onClick={() => setActiveCategory('goals')}
-            className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               activeCategory === 'goals'
-                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
+                ? 'bg-amber-400 text-slate-950 shadow-md font-extrabold ring-2 ring-amber-400/30'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Flame className="w-4 h-4 text-amber-400" />
+            <Flame className="w-4 h-4 text-amber-950 fill-amber-950" />
             <span>Top Scorers</span>
           </button>
 
           <button
             onClick={() => setActiveCategory('assists')}
-            className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               activeCategory === 'assists'
                 ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <Award className="w-4 h-4 text-amber-400" />
-            <span>Most Assists</span>
+            <span>Top Assister</span>
           </button>
 
           <button
             onClick={() => setActiveCategory('cleanSheets')}
-            className={`flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               activeCategory === 'cleanSheets'
                 ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
                 : 'text-slate-400 hover:text-slate-200'
@@ -76,134 +208,37 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams }) => {
             <ShieldCheck className="w-4 h-4 text-amber-400" />
             <span>Clean Sheets</span>
           </button>
+
+          <button
+            onClick={() => setActiveCategory('topPerformers')}
+            className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+              activeCategory === 'topPerformers'
+                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Star className="w-4 h-4 text-amber-400" />
+            <span>{starsLabel}</span>
+          </button>
         </div>
       </div>
 
-      {/* Top 3 Podium Visual */}
-      {top3.length > 0 && (
-        <div className="bg-gradient-to-br from-slate-900 via-slate-950 to-[#800020] rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border border-slate-800">
-          <div className="text-center mb-6">
-            <span className="text-amber-400 font-extrabold text-xs uppercase tracking-widest bg-amber-400/10 border border-amber-400/30 px-3 py-1 rounded-full">
-              {label}
-            </span>
-          </div>
+      {/* Master Leaderboard Widget Deployment */}
+      <MasterLeaderboardWidget
+        title={title}
+        subtitle={subtitle}
+        players={currentData}
+        teamsMap={teamsMap}
+        metricLabel={metricLabel}
+      />
 
-          <div className="grid grid-cols-3 gap-2 sm:gap-6 items-end max-w-2xl mx-auto pt-4">
-            {/* 2nd Place */}
-            {top3[1] && (
-              <div className="flex flex-col items-center text-center space-y-2 order-1">
-                <div className="relative">
-                  <img
-                    src={top3[1].photoUrl}
-                    alt={top3[1].name}
-                    className="w-14 h-14 sm:w-20 sm:h-20 rounded-full object-cover border-4 border-slate-300 shadow-xl"
-                  />
-                  <span className="absolute -bottom-2 -right-1 w-6 h-6 rounded-full bg-slate-300 text-slate-950 font-black text-xs flex items-center justify-center border-2 border-slate-900">
-                    2
-                  </span>
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-xs sm:text-sm truncate max-w-[100px]">{top3[1].name}</h4>
-                  <p className="text-[10px] text-slate-400 font-medium">{teamsMap.get(top3[1].teamId)?.shortName}</p>
-                  <div className="mt-1 bg-white/10 px-2 py-0.5 rounded-md font-mono text-xs font-black text-amber-300">
-                    {activeCategory === 'assists' ? top3[1].assists : activeCategory === 'cleanSheets' ? top3[1].cleanSheets : top3[1].goals} {metricName}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 1st Place */}
-            {top3[0] && (
-              <div className="flex flex-col items-center text-center space-y-2 order-2 -mt-4">
-                <div className="relative">
-                  <div className="absolute -top-6 text-2xl">👑</div>
-                  <img
-                    src={top3[0].photoUrl}
-                    alt={top3[0].name}
-                    className="w-20 h-20 sm:w-28 sm:h-28 rounded-full object-cover border-4 border-amber-400 shadow-2xl ring-4 ring-amber-400/30"
-                  />
-                  <span className="absolute -bottom-2 -right-1 w-8 h-8 rounded-full bg-amber-400 text-slate-950 font-black text-sm flex items-center justify-center border-2 border-slate-900 shadow-lg">
-                    1
-                  </span>
-                </div>
-                <div>
-                  <h4 className="font-black text-sm sm:text-base text-amber-300 truncate max-w-[120px]">{top3[0].name}</h4>
-                  <p className="text-xs text-rose-200 font-bold">{teamsMap.get(top3[0].teamId)?.name}</p>
-                  <div className="mt-1.5 bg-amber-400 text-slate-950 font-mono text-sm font-black px-3 py-1 rounded-xl shadow-lg">
-                    {activeCategory === 'assists' ? top3[0].assists : activeCategory === 'cleanSheets' ? top3[0].cleanSheets : top3[0].goals} {metricName}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 3rd Place */}
-            {top3[2] && (
-              <div className="flex flex-col items-center text-center space-y-2 order-3">
-                <div className="relative">
-                  <img
-                    src={top3[2].photoUrl}
-                    alt={top3[2].name}
-                    className="w-14 h-14 sm:w-20 sm:h-20 rounded-full object-cover border-4 border-amber-700 shadow-xl"
-                  />
-                  <span className="absolute -bottom-2 -right-1 w-6 h-6 rounded-full bg-amber-700 text-white font-black text-xs flex items-center justify-center border-2 border-slate-900">
-                    3
-                  </span>
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-xs sm:text-sm truncate max-w-[100px]">{top3[2].name}</h4>
-                  <p className="text-[10px] text-slate-400 font-medium">{teamsMap.get(top3[2].teamId)?.shortName}</p>
-                  <div className="mt-1 bg-white/10 px-2 py-0.5 rounded-md font-mono text-xs font-black text-amber-300">
-                    {activeCategory === 'assists' ? top3[2].assists : activeCategory === 'cleanSheets' ? top3[2].cleanSheets : top3[2].goals} {metricName}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+      {selectedProfile && (
+        <PlayerProfileModal
+          player={selectedProfile}
+          team={teamsMap.get(selectedProfile.teamId)}
+          onClose={() => setSelectedProfile(null)}
+        />
       )}
-
-      {/* Full Leaderboard List */}
-      <div className="bg-slate-900/90 rounded-3xl p-4 sm:p-6 shadow-2xl border border-slate-800 backdrop-blur-sm">
-        <h3 className="text-sm font-extrabold text-slate-100 uppercase tracking-wider mb-4 pb-2 border-b border-slate-800">
-          Complete {metricName} Rankings
-        </h3>
-
-        <div className="divide-y divide-slate-800/80">
-          {players.map((player, idx) => {
-            const team = teamsMap.get(player.teamId);
-            const val = activeCategory === 'assists' ? player.assists : activeCategory === 'cleanSheets' ? player.cleanSheets : player.goals;
-
-            return (
-              <div key={player.id} className="py-3 flex items-center justify-between gap-4 hover:bg-slate-800/60 px-2.5 rounded-xl transition-colors">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono font-black text-slate-500 text-sm w-6 text-center">
-                    #{idx + 1}
-                  </span>
-                  <img
-                    src={player.photoUrl}
-                    alt={player.name}
-                    className="w-10 h-10 rounded-full object-cover border border-slate-700 shadow-xs bg-slate-800"
-                  />
-                  <div>
-                    <div className="font-bold text-slate-100 text-sm">
-                      {player.name}
-                    </div>
-                    <div className="text-xs text-slate-400 font-medium flex items-center gap-2">
-                      <span>{team?.name || 'Free Agent'}</span>
-                      <span className="text-slate-600">&bull;</span>
-                      <span className="font-mono text-slate-400">#{player.shirtNumber} ({player.position})</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="font-mono font-black text-base text-amber-300 bg-slate-950 px-3.5 py-1 rounded-xl border border-slate-800">
-                  {val} <span className="text-[10px] font-normal text-slate-400">{metricName.toLowerCase()}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 };

@@ -1,25 +1,232 @@
-import React, { useState } from 'react';
-import { Match, MatchEvent } from '../types';
+import React, { useState, useEffect } from 'react';
+import { useBackHandler } from '../utils/backManager';
+import { Match, MatchEvent, FixtureChatMessage, UserAccount } from '../types';
 import { Pitch2D } from './Pitch2D';
-import { X, Clock, Award, Star, Activity, ArrowRightLeft, ShieldAlert } from 'lucide-react';
-import { formatMatchDisplayTime } from '../utils/matchClock';
+import { PlayerProfileModal } from './PlayerProfileModal';
+import { Player, Team } from '../types';
+import { MatchPredictionWidget } from './MatchPredictionWidget';
+import { X, Clock, Award, Star, Activity, ArrowRightLeft, ShieldAlert, ArrowLeft } from 'lucide-react';
+import { useMatchClock, formatMatchDisplayTime } from '../utils/matchClock';
+import { api } from '../services/api';
 
 interface MatchDetailModalProps {
   match: Match;
+  players?: Player[];
+  teams?: Team[];
+  isAdmin?: boolean;
+  currentUser?: UserAccount | null;
   onClose: () => void;
 }
 
-export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'timeline' | 'lineups' | 'ratings' | 'stats'>('timeline');
+interface MatchEventRowProps {
+  evt: MatchEvent;
+  isHomeEvent: boolean;
+  getPlayerName: (pId: string, fallback?: string) => string;
+}
+
+const MatchEventRow: React.FC<MatchEventRowProps> = ({ evt, isHomeEvent, getPlayerName }) => {
+  const mainPlayerName = evt.playerName || getPlayerName(evt.playerId);
+  const subInName = evt.subInPlayerName || (evt.subInPlayerId ? getPlayerName(evt.subInPlayerId) : null);
+  const assisterName = evt.assisterName || (evt.assisterId ? getPlayerName(evt.assisterId) : null);
+
+  const renderIcon = () => {
+    if (evt.eventType === 'Goal') {
+      if (evt.goalType === 'penalty') return <span title="Penalty Goal" className="text-base sm:text-lg select-none">🎯</span>;
+      if (evt.goalType === 'own_goal') return <span title="Own Goal" className="text-base sm:text-lg select-none">🔴⚽</span>;
+      return <span title="Goal" className="text-base sm:text-lg select-none">⚽</span>;
+    }
+    if (evt.eventType === 'penalty_miss') return <span title="Penalty Miss" className="text-base sm:text-lg select-none">❌</span>;
+    if (evt.eventType === 'Yellow Card') return <span title="Yellow Card" className="text-base sm:text-lg select-none">🟨</span>;
+    if (evt.eventType === 'Red Card') return <span title="Red Card" className="text-base sm:text-lg select-none">🟥</span>;
+    if (evt.eventType === 'Sub') return <span title="Substitution" className="text-base sm:text-lg select-none">🔄</span>;
+    return <span className="text-base sm:text-lg select-none">⏱️</span>;
+  };
+
+  const renderPlayerInfo = (isLeft: boolean) => {
+    if (evt.eventType === 'Sub') {
+      return (
+        <div className={`flex flex-col ${isLeft ? 'text-left' : 'text-right'} min-w-0`}>
+          <span className="font-bold text-slate-100 text-xs sm:text-sm truncate">
+            {subInName || mainPlayerName}
+          </span>
+          {mainPlayerName && subInName && (
+            <span className="text-slate-400 text-[11px] truncate">
+              {mainPlayerName}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className={`flex flex-col ${isLeft ? 'text-left' : 'text-right'} min-w-0`}>
+        <span className="font-bold text-slate-100 text-xs sm:text-sm truncate">
+          {mainPlayerName}
+        </span>
+        {assisterName && (
+          <span className="text-slate-400 text-[11px] truncate">
+            Assist: {assisterName}
+          </span>
+        )}
+        {evt.detail && (
+          <span className="text-slate-400 text-[10px] italic truncate">
+            {evt.detail}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  if (isHomeEvent) {
+    // Condition A: Home Team Event (Render on the Left)
+    return (
+      <div 
+        className="w-full flex items-center justify-start mb-3 text-sm"
+        style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'flex-start', marginBottom: '12px', fontSize: '14px' }}
+      >
+        <span className="font-extrabold text-amber-400 min-w-[32px] text-left shrink-0">
+          {evt.minute}'
+        </span>
+
+        <span className="mx-2 shrink-0 flex items-center">
+          {renderIcon()}
+        </span>
+
+        <div className="max-w-[70%] bg-slate-950/80 px-3 py-1.5 rounded-xl border border-rose-900/40 shadow-sm">
+          {renderPlayerInfo(true)}
+        </div>
+      </div>
+    );
+  }
+
+  // Condition B: Away Team Event (Render on the Right)
+  return (
+    <div 
+      className="w-full flex items-center justify-end mb-3 text-sm"
+      style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'flex-end', marginBottom: '12px', fontSize: '14px' }}
+    >
+      <div className="max-w-[70%] bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-800 shadow-sm">
+        {renderPlayerInfo(false)}
+      </div>
+
+      <span className="mx-2 shrink-0 flex items-center">
+        {renderIcon()}
+      </span>
+
+      <span className="font-extrabold text-amber-400 min-w-[32px] text-right shrink-0">
+        {evt.minute}'
+      </span>
+    </div>
+  );
+};
+
+export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, players = [], teams = [], isAdmin = false, currentUser = null, onClose }) => {
+  const [selectedProfilePlayer, setSelectedProfilePlayer] = useState<Player | null>(null);
+  const [activeTab, setActiveTab] = useState<'timeline' | 'lineups' | 'stats' | 'chat'>('timeline');
   const [selectedTeamLineup, setSelectedTeamLineup] = useState<'home' | 'away'>('home');
+
+  const [chatMessages, setChatMessages] = useState<FixtureChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  
+  const defaultUsername = currentUser?.name || localStorage.getItem('epl_chat_username') || 'EPL Fan';
+  const [usernameInput, setUsernameInput] = useState(defaultUsername);
+  
+  useEffect(() => {
+    if (currentUser?.name) {
+      setUsernameInput(currentUser.name);
+    }
+  }, [currentUser]);
+
+  const [sendingChat, setSendingChat] = useState(false);
+
+  useBackHandler(() => {
+    if (selectedProfilePlayer) {
+      setSelectedProfilePlayer(null);
+      return true;
+    }
+    return false;
+  }, [selectedProfilePlayer]);
+
+  const longPressTimerRef = React.useRef<any>(null);
+
+  useEffect(() => {
+    if (!match?.id) return;
+    let isMounted = true;
+    const fetchChats = () => {
+      api.getFixtureChats(match.id)
+        .then(res => {
+          if (isMounted) setChatMessages(Array.isArray(res) ? res : []);
+        })
+        .catch(() => {
+          if (isMounted) setChatMessages([]);
+        });
+    };
+
+    fetchChats();
+    const interval = setInterval(fetchChats, 4000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [match?.id]);
+
+  const handleSendChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || sendingChat) return;
+    setSendingChat(true);
+    try {
+      localStorage.setItem('epl_chat_username', usernameInput);
+      const newMsg = await api.addFixtureMessage(match.id, {
+        userId: (usernameInput || '').toLowerCase().replace(/\s+/g, '-'),
+        username: usernameInput,
+        content: chatInput.trim()
+      });
+      setChatMessages(prev => [...prev, newMsg]);
+      setChatInput('');
+    } catch (err) {
+      console.error('Failed to send chat message', err);
+    } finally {
+      setSendingChat(false);
+    }
+  };
+
+  const handleDeleteMessage = async (chatId: string) => {
+    const isSuperAdmin = isAdmin || localStorage.getItem('isAdmin') === 'true';
+    if (!isSuperAdmin) return;
+    if (!confirm('Super Admin: Delete this fixture chat message?')) return;
+    try {
+      const success = await api.deleteFixtureMessage(match.id, chatId);
+      if (success) {
+        setChatMessages(prev => prev.filter(m => m.id !== chatId));
+      }
+    } catch (err) {
+      console.error('Failed to delete chat message', err);
+    }
+  };
+
+  const handleTouchStart = (chatId: string) => {
+    const isSuperAdmin = isAdmin || localStorage.getItem('isAdmin') === 'true';
+    if (!isSuperAdmin) return;
+    longPressTimerRef.current = setTimeout(() => {
+      handleDeleteMessage(chatId);
+    }, 600);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
 
   const isLive = match.status === 'Live';
   const isFullTime = match.status === 'Full-Time';
 
-  // Find Man of the Match (Highest rating)
-  let motmPlayerId: string | null = null;
-  let highestRating = 0;
-  if (match.ratings) {
+  // Man of the Match
+  let motmPlayerId: string | null = match.motmPlayerId || null;
+  let highestRating = match.motmPlayerId && match.ratings ? Number(match.ratings[match.motmPlayerId]) || 0 : 0;
+  
+  if (!motmPlayerId && match.ratings) {
     Object.entries(match.ratings).forEach(([pId, rating]) => {
       const numRating = typeof rating === 'number' ? rating : Number(rating);
       if (numRating > highestRating) {
@@ -42,291 +249,262 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, onClo
     return found ? found.name : (fallback || 'Player');
   };
 
+  const clock = useMatchClock(match);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto">
-      <div className="bg-slate-900 rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden border border-slate-800 my-auto animate-in fade-in zoom-in duration-200 text-slate-100">
-        {/* Top Header & Scoreboard Banner */}
-        <div className="bg-gradient-to-br from-[#800020] via-rose-950 to-slate-950 text-white p-4 sm:p-6 relative border-b border-rose-900/40">
+    <div className="fixed inset-0 z-50 w-full h-full min-h-screen bg-slate-950 text-slate-100 flex flex-col overflow-y-auto pt-safe pb-safe px-safe ios-scroll animate-in fade-in duration-200">
+      <div className="w-full flex-1 flex flex-col min-h-screen bg-slate-950">
+        
+        {/* Top Sticky Navigation Header Bar */}
+        <div className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-md px-4 py-3 border-b border-slate-800 flex items-center justify-between shadow-md">
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-slate-950/60 hover:bg-slate-950 text-white transition-colors cursor-pointer border border-rose-800/60"
+            className="flex items-center gap-2 text-xs font-bold text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-800 transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back</span>
           </button>
-
-          <div className="text-center max-w-xl mx-auto space-y-4">
-            {/* Status Pill */}
-            <div className="flex items-center justify-center gap-2">
-              <span className="text-xs font-semibold text-rose-200/80 uppercase tracking-wider">
-                Epe Premier League &bull; Matchday {match.matchday}
-              </span>
-              <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-full ${
-                formatMatchDisplayTime(match.matchMinute, match.period, match.stoppageTime1stHalf, match.stoppageTime2ndHalf).badgeColor
-              }`}>
-                {formatMatchDisplayTime(match.matchMinute, match.period, match.stoppageTime1stHalf, match.stoppageTime2ndHalf).displayString}
-              </span>
-            </div>
-
-            {/* Scoreboard Grid */}
-            <div className="grid grid-cols-3 items-center">
-              {/* Home */}
-              <div className="flex flex-col items-center gap-2">
-                <img
-                  src={match.homeTeam?.logoUrl}
-                  alt={match.homeTeam?.name}
-                  className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-white/20 shadow-lg bg-white/10"
-                />
-                <h3 className="font-extrabold text-sm sm:text-lg text-white">
-                  {match.homeTeam?.name}
-                </h3>
-              </div>
-
-              {/* Score */}
-              <div className="flex flex-col items-center">
-                <div className="text-4xl sm:text-6xl font-black text-amber-300 font-mono tracking-wider bg-black/40 px-4 py-2 rounded-2xl border border-white/10">
-                  {match.homeScore} - {match.awayScore}
-                </div>
-                <span className="text-xs text-rose-200/80 font-medium mt-2">
-                  {match.venue}
-                </span>
-              </div>
-
-              {/* Away */}
-              <div className="flex flex-col items-center gap-2">
-                <img
-                  src={match.awayTeam?.logoUrl}
-                  alt={match.awayTeam?.name}
-                  className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-white/20 shadow-lg bg-white/10"
-                />
-                <h3 className="font-extrabold text-sm sm:text-lg text-white">
-                  {match.awayTeam?.name}
-                </h3>
-              </div>
-            </div>
+          
+          <div className="text-center">
+            <h2 className="text-sm font-extrabold text-white uppercase tracking-wider">Match Center</h2>
+            <p className="text-[10px] text-rose-300 font-semibold uppercase tracking-widest">
+              Epe Premier League &bull; Matchday {match.matchday}
+            </p>
           </div>
+          
+          <div className="w-[82px]"></div> {/* Spacer to keep header centered */}
+        </div>
 
-          {/* Modal Tabs */}
-          <div className="flex items-center justify-center gap-1 sm:gap-2 mt-6 pt-4 border-t border-rose-800/50">
-            <button
-              onClick={() => setActiveTab('timeline')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                activeTab === 'timeline'
-                  ? 'bg-white text-[#800020] shadow-md'
-                  : 'text-rose-100 hover:bg-white/10'
-              }`}
-            >
-              Timeline
-            </button>
+        {/* Top Scoreboard Banner */}
+        <div className="bg-gradient-to-br from-[#800020] via-rose-950 to-slate-950 text-white p-4 sm:p-6 border-b border-rose-900/40">
+          <div className="max-w-3xl mx-auto space-y-4">
 
-            <button
-              onClick={() => setActiveTab('lineups')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                activeTab === 'lineups'
-                  ? 'bg-white text-[#800020] shadow-md'
-                  : 'text-rose-100 hover:bg-white/10'
-              }`}
-            >
-              Lineups & Formations
-            </button>
+            {/* Central Scoreboard Box - Single Horizontal Line */}
+            <div className="bg-slate-950/80 border border-rose-800/50 rounded-2xl p-4 sm:p-6 shadow-2xl backdrop-blur-sm">
+              <div className="flex items-center justify-between sm:justify-center gap-2 sm:gap-6">
+                
+                {/* Home Team (Right-aligned text + logo) */}
+                <div className="flex items-center gap-2 sm:gap-3 flex-1 justify-end min-w-0">
+                  <span className="font-extrabold text-xs sm:text-lg text-white text-right truncate">
+                    {match.homeTeam?.name}
+                  </span>
+                  <img
+                    src={match.homeTeam?.logoUrl}
+                    alt={match.homeTeam?.name}
+                    className="w-10 h-10 sm:w-16 sm:h-16 rounded-full object-cover border-2 border-white/20 shadow-lg bg-white/10 shrink-0"
+                  />
+                </div>
 
-            <button
-              onClick={() => setActiveTab('ratings')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                activeTab === 'ratings'
-                  ? 'bg-white text-[#800020] shadow-md'
-                  : 'text-rose-100 hover:bg-white/10'
-              }`}
-            >
-              Live Ratings
-            </button>
+                {/* Score Center Box (Single Line) */}
+                <div className="flex flex-col items-center shrink-0 px-1 sm:px-3">
+                  <div className="text-2xl sm:text-5xl font-black text-amber-300 font-mono tracking-wider whitespace-nowrap bg-black/70 px-3.5 sm:px-6 py-1.5 sm:py-2 rounded-2xl border border-white/10 shadow-inner">
+                    {match.homeScore} - {match.awayScore}
+                  </div>
+                </div>
 
-            <button
-              onClick={() => setActiveTab('stats')}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                activeTab === 'stats'
-                  ? 'bg-white text-[#800020] shadow-md'
-                  : 'text-rose-100 hover:bg-white/10'
-              }`}
-            >
-              Match Stats
-            </button>
+                {/* Away Team (Logo + Left-aligned text) */}
+                <div className="flex items-center gap-2 sm:gap-3 flex-1 justify-start min-w-0">
+                  <img
+                    src={match.awayTeam?.logoUrl}
+                    alt={match.awayTeam?.name}
+                    className="w-10 h-10 sm:w-16 sm:h-16 rounded-full object-cover border-2 border-white/20 shadow-lg bg-white/10 shrink-0"
+                  />
+                  <span className="font-extrabold text-xs sm:text-lg text-white text-left truncate">
+                    {match.awayTeam?.name}
+                  </span>
+                </div>
+              </div>
+
+              {/* Venue & Nested Live Clock Badge DIRECTLY Underneath Scoreline */}
+              <div className="flex flex-col items-center gap-2 mt-4 pt-3 border-t border-rose-900/40 text-center">
+                <span className="text-[11px] sm:text-xs text-rose-200/90 font-medium flex items-center gap-1">
+                  📍 {match.venue || 'Epe Township Stadium'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs sm:text-sm font-black px-3.5 py-1 rounded-full shadow-md flex items-center gap-1.5 border ${clock.badgeColor}`}>
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{clock.displayString} {clock.overflowText ? `(${clock.overflowText})` : ''}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Tabs */}
+            <div className="flex items-center justify-between w-full py-2 px-4 gap-1.5 sm:gap-2 pt-2">
+              <button
+                onClick={() => setActiveTab('timeline')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                  activeTab === 'timeline'
+                    ? 'bg-white text-[#800020] shadow-md'
+                    : 'text-rose-100 hover:bg-white/10'
+                }`}
+              >
+                Details
+              </button>
+
+              <button
+                onClick={() => setActiveTab('lineups')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                  activeTab === 'lineups'
+                    ? 'bg-white text-[#800020] shadow-md'
+                    : 'text-rose-100 hover:bg-white/10'
+                }`}
+              >
+                Lineups & Formations
+              </button>
+
+
+              <button
+                onClick={() => setActiveTab('stats')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+                  activeTab === 'stats'
+                    ? 'bg-white text-[#800020] shadow-md'
+                    : 'text-rose-100 hover:bg-white/10'
+                }`}
+              >
+                Match Stats
+              </button>
+
+              <button
+                onClick={() => setActiveTab('chat')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'chat'
+                    ? 'bg-white text-[#800020] shadow-md'
+                    : 'text-rose-100 hover:bg-white/10'
+                }`}
+              >
+                <span>💬 Live Chat</span>
+                <span className="text-[10px] bg-rose-900 text-amber-300 px-1.5 py-0.2 rounded-full font-black">
+                  {chatMessages.length}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Modal Body */}
-        <div className="p-4 sm:p-6 max-h-[60vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 flex-1 space-y-5 max-w-4xl mx-auto w-full">
+          {/* Fan Prediction Engine Integration */}
+          <div className="max-w-2xl mx-auto">
+            <MatchPredictionWidget match={match} />
+          </div>
+
           {/* TAB 1: TIMELINE */}
-          {activeTab === 'timeline' && (
-            <div className="space-y-4 max-w-2xl mx-auto">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider text-center mb-4">
-                Match Events Timeline
-              </h4>
+          {activeTab === 'timeline' && (() => {
+            const sortedEvents = [...(match.events || [])].sort((a, b) => a.minute - b.minute);
+            const firstHalfEvents = sortedEvents.filter(e => e.minute <= 45);
+            const secondHalfEvents = sortedEvents.filter(e => e.minute > 45);
 
-              {!match.events || match.events.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 font-medium text-sm">
-                  No match events recorded yet.
+            let htHomeScore = 0;
+            let htAwayScore = 0;
+            firstHalfEvents.filter(e => e.eventType === 'Goal').forEach(e => {
+              const isHome = e.teamId ? e.teamId === match.homeTeamId : ((e as any).team === 'home');
+              if (e.goalType === 'own_goal') {
+                if (isHome) htAwayScore += 1;
+                else htHomeScore += 1;
+              } else {
+                if (isHome) htHomeScore += 1;
+                else htAwayScore += 1;
+              }
+            });
+
+            return (
+              <div className="space-y-4 max-w-2xl mx-auto">
+                {/* Header Team Labels */}
+                <div className="flex items-center justify-between px-3.5 py-2 bg-slate-950/90 rounded-2xl border border-slate-800 text-xs font-black uppercase tracking-wider text-slate-300 shadow-sm">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <img src={match.homeTeam?.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+                    <span className="text-amber-300 truncate">{match.homeTeam?.name}</span>
+                  </div>
+                  <span className="text-[10px] text-amber-400 font-mono bg-amber-400/10 px-2.5 py-0.5 rounded-full border border-amber-400/20 shrink-0 mx-2">
+                    MATCH EVENTS
+                  </span>
+                  <div className="flex items-center gap-2 min-w-0 justify-end">
+                    <span className="text-slate-300 truncate">{match.awayTeam?.name}</span>
+                    <img src={match.awayTeam?.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+                  </div>
                 </div>
-              ) : (
-                <div className="relative border-l-2 border-slate-200 ml-4 sm:ml-32 space-y-6">
-                  {match.events.map((evt: MatchEvent) => {
-                    const isHomeEvent = evt.teamId === match.homeTeamId;
 
-                    return (
-                      <div key={evt.id} className="relative pl-6 flex items-start gap-3">
-                        {/* Minute Bubble */}
-                        <div className="absolute -left-3.5 top-0 w-7 h-7 rounded-full bg-[#800020] text-amber-300 font-extrabold text-[11px] flex items-center justify-center border-2 border-white shadow-md">
-                          {evt.minute}'
-                        </div>
+                {!match.events || match.events.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400 font-medium text-sm bg-slate-950/40 rounded-2xl border border-slate-800">
+                    No match events recorded yet.
+                  </div>
+                ) : (
+                  <div className="w-full space-y-1 py-2">
+                    {/* First Half Events */}
+                    {firstHalfEvents.map((evt: MatchEvent) => {
+                      const isHomeEvent = evt.teamId ? evt.teamId === match.homeTeamId : ((evt as any).team === 'home');
+                      return (
+                        <MatchEventRow
+                          key={evt.id}
+                          evt={evt}
+                          isHomeEvent={isHomeEvent}
+                          getPlayerName={getPlayerName}
+                        />
+                      );
+                    })}
 
-                        {/* Event Card */}
-                        <div className={`p-3 rounded-2xl border w-full text-xs font-medium ${
-                          isHomeEvent
-                            ? 'bg-rose-950/40 border-rose-800 text-slate-100'
-                            : 'bg-slate-950/80 border-slate-800 text-slate-100'
-                        }`}>
-                          <div className="flex items-center justify-between font-bold text-sm">
-                            <span className="flex items-center gap-2">
-                              {evt.eventType === 'Goal' && '⚽'}
-                              {evt.eventType === 'Penalty Goal' && '⚽ (P)'}
-                              {evt.eventType === 'Yellow Card' && '🟨'}
-                              {evt.eventType === 'Red Card' && '🟥'}
-                              {evt.eventType === 'Sub' && '🔄'}
-                              <span>{evt.playerName || getPlayerName(evt.playerId)}</span>
-                            </span>
-                            <span className="text-[10px] uppercase font-bold text-slate-400">
-                              {isHomeEvent ? match.homeTeam?.shortName : match.awayTeam?.shortName}
-                            </span>
-                          </div>
+                    {/* Center Divider: Half-Time */}
+                    <div className="flex items-center my-4 w-full">
+                      <div className="flex-1 h-px bg-slate-800"></div>
+                      <span className="px-3 py-1 bg-slate-900 text-amber-300 border border-slate-700 rounded-full font-black text-xs uppercase tracking-wider mx-3 shadow-md">
+                        HT {htHomeScore} - {htAwayScore}
+                      </span>
+                      <div className="flex-1 h-px bg-slate-800"></div>
+                    </div>
 
-                          {/* Detail text */}
-                          {evt.assisterName && (
-                            <p className="text-slate-300 mt-1">
-                              Assist: <span className="font-bold text-amber-300">{evt.assisterName}</span>
-                            </p>
-                          )}
-                          {evt.detail && (
-                            <p className="text-slate-400 italic mt-0.5">{evt.detail}</p>
-                          )}
-                        </div>
+                    {/* Second Half Events */}
+                    {secondHalfEvents.map((evt: MatchEvent) => {
+                      const isHomeEvent = evt.teamId ? evt.teamId === match.homeTeamId : ((evt as any).team === 'home');
+                      return (
+                        <MatchEventRow
+                          key={evt.id}
+                          evt={evt}
+                          isHomeEvent={isHomeEvent}
+                          getPlayerName={getPlayerName}
+                        />
+                      );
+                    })}
+
+                    {/* Center Divider: Full-Time */}
+                    {(match.status === 'Full-Time' || (match.matchMinute && match.matchMinute >= 90)) && (
+                      <div className="flex items-center my-4 w-full">
+                        <div className="flex-1 h-px bg-slate-800"></div>
+                        <span className="px-3 py-1 bg-[#800020] text-amber-300 border border-rose-800 rounded-full font-black text-xs uppercase tracking-wider mx-3 shadow-md">
+                          FT {match.homeScore} - {match.awayScore}
+                        </span>
+                        <div className="flex-1 h-px bg-slate-800"></div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB 2: LINEUPS & FORMATION */}
-          {activeTab === 'lineups' && (
-            <div className="space-y-4">
-              {/* Selector for Home vs Away Pitch view */}
-              <div className="flex justify-center gap-2 mb-4">
-                <button
-                  onClick={() => setSelectedTeamLineup('home')}
-                  className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    selectedTeamLineup === 'home'
-                      ? 'bg-[#800020] text-white shadow-md'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  {match.homeTeam?.name} Lineup
-                </button>
-                <button
-                  onClick={() => setSelectedTeamLineup('away')}
-                  className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                    selectedTeamLineup === 'away'
-                      ? 'bg-[#800020] text-white shadow-md'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  {match.awayTeam?.name} Lineup
-                </button>
-              </div>
-
-              {selectedTeamLineup === 'home' ? (
-                <Pitch2D
-                  lineup={match.homeLineup}
-                  teamName={match.homeTeam?.name}
-                  ratings={match.ratings}
-                />
-              ) : (
-                <Pitch2D
-                  lineup={match.awayLineup}
-                  teamName={match.awayTeam?.name}
-                  ratings={match.ratings}
-                />
-              )}
-            </div>
-          )}
-
-          {/* TAB 3: LIVE RATINGS */}
-          {activeTab === 'ratings' && (
-            <div className="space-y-6 max-w-3xl mx-auto">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Player Performance Ratings (Out of 10.0)
-                </h4>
-                {motmPlayerId && (
-                  <div className="flex items-center gap-1.5 bg-amber-100 text-amber-900 border border-amber-300 px-3 py-1 rounded-full text-xs font-extrabold">
-                    <Star className="w-3.5 h-3.5 text-amber-600 fill-amber-500" />
-                    <span>MOTM: {getPlayerName(motmPlayerId)} ({highestRating.toFixed(1)})</span>
+                    )}
                   </div>
                 )}
               </div>
+            );
+          })()}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Home Ratings */}
-                <div className="space-y-2 bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <h5 className="font-black text-sm text-amber-300 border-b border-slate-800 pb-2 mb-3 flex items-center justify-between">
-                    <span>{match.homeTeam?.name} Ratings</span>
-                  </h5>
-                  {match.homeLineup?.startingXI.map(p => {
-                    const r = match.ratings?.[p.playerId] || p.rating || 6.5;
-                    const isMotm = p.playerId === motmPlayerId;
-                    return (
-                      <div key={p.playerId} className="flex items-center justify-between text-xs py-1 border-b border-slate-800/80 last:border-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-slate-500 font-bold w-5">#{p.number}</span>
-                          <span className="font-bold text-slate-200">{p.name}</span>
-                          {isMotm && <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />}
-                        </div>
-                        <span className={`font-black px-2 py-0.5 rounded-md ${
-                          r >= 8.0 ? 'bg-emerald-500 text-white' : r >= 7.0 ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'
-                        }`}>
-                          {r.toFixed(1)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Away Ratings */}
-                <div className="space-y-2 bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <h5 className="font-black text-sm text-amber-300 border-b border-slate-800 pb-2 mb-3 flex items-center justify-between">
-                    <span>{match.awayTeam?.name} Ratings</span>
-                  </h5>
-                  {match.awayLineup?.startingXI.map(p => {
-                    const r = match.ratings?.[p.playerId] || p.rating || 6.5;
-                    const isMotm = p.playerId === motmPlayerId;
-                    return (
-                      <div key={p.playerId} className="flex items-center justify-between text-xs py-1 border-b border-slate-800/80 last:border-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-slate-500 font-bold w-5">#{p.number}</span>
-                          <span className="font-bold text-slate-200">{p.name}</span>
-                          {isMotm && <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />}
-                        </div>
-                        <span className={`font-black px-2 py-0.5 rounded-md ${
-                          r >= 8.0 ? 'bg-emerald-500 text-white' : r >= 7.0 ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'
-                        }`}>
-                          {r.toFixed(1)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
+          {/* TAB 2: LINEUPS & FORMATION */}
+          {activeTab === 'lineups' && (
+            <Pitch2D
+              match={match}
+              players={players}
+              events={match.events}
+              ratings={match.ratings}
+              homeTeam={match.homeTeam}
+              awayTeam={match.awayTeam}
+              selectedTeamSide={selectedTeamLineup}
+              onTeamChange={setSelectedTeamLineup}
+              onPlayerClick={(p) => {
+                const targetId = (p as any).playerId || p.id;
+                const fullP = players?.find(x => x.id === targetId || (x.name && p.name && x.name.toLowerCase() === p.name.toLowerCase()));
+                if (fullP) {
+                  setSelectedProfilePlayer(fullP);
+                } else if ('goals' in p) {
+                  setSelectedProfilePlayer(p as Player);
+                }
+              }}
+            />
           )}
+
 
           {/* TAB 4: MATCH STATS */}
           {activeTab === 'stats' && (
@@ -393,8 +571,105 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, onClo
               )}
             </div>
           )}
+
+          {/* TAB 5: LIVE CHAT */}
+          {activeTab === 'chat' && (
+            <div className="max-w-2xl mx-auto bg-slate-950 rounded-2xl p-4 border border-slate-800 flex flex-col h-[420px]">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-xs font-black text-white uppercase tracking-wider">Live Match Discussion & Chat</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400 font-medium">
+                    Chatting as: <strong className="text-white">{usernameInput}</strong>
+                  </span>
+                </div>
+              </div>
+
+              {/* Messages List */}
+              <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+                {chatMessages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center py-10 space-y-3">
+                    <div className="w-16 h-16 rounded-3xl bg-[#800020]/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-inner">
+                      📢
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-white uppercase tracking-wider">No comments yet</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-xs">Be the first to predict the score, share live match commentary, or debate referee decisions!</p>
+                    </div>
+                  </div>
+                ) : (
+                  chatMessages.map(msg => {
+                    const isSuperAdmin = isAdmin || localStorage.getItem('isAdmin') === 'true';
+                    return (
+                      <div
+                        key={msg.id}
+                        onTouchStart={() => handleTouchStart(msg.id)}
+                        onTouchEnd={handleTouchEnd}
+                        onMouseDown={() => handleTouchStart(msg.id)}
+                        onMouseUp={handleTouchEnd}
+                        className="group relative bg-slate-900/80 rounded-xl p-3 border border-slate-800/80 space-y-1 select-none hover:border-rose-900/50 transition-colors"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black text-rose-300">{msg.username}</span>
+                            {isSuperAdmin && (
+                              <span className="text-[9px] bg-amber-500/10 text-amber-300 px-1.5 py-0.2 rounded border border-amber-500/20 font-mono">
+                                Admin (Long-press to delete)
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            {isSuperAdmin && (
+                              <button
+                                onClick={() => handleDeleteMessage(msg.id)}
+                                title="Delete Message (Super Admin)"
+                                className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300 p-1 rounded transition-opacity cursor-pointer"
+                              >
+                                🗑️
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-200 leading-relaxed">{msg.content}</p>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Input Form */}
+              <form onSubmit={handleSendChat} className="mt-3 pt-3 border-t border-slate-800 flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Share live match commentary..."
+                  className="flex-1 bg-slate-900 text-xs text-white px-3 py-2.5 rounded-xl border border-slate-800 focus:outline-none focus:border-rose-600"
+                />
+                <button
+                  type="submit"
+                  disabled={sendingChat || !chatInput.trim()}
+                  className="bg-[#800020] hover:bg-rose-900 disabled:opacity-50 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition-colors cursor-pointer shadow-lg"
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          )}
         </div>
       </div>
+      {selectedProfilePlayer && (
+        <PlayerProfileModal 
+          player={selectedProfilePlayer} 
+          team={teams.find(t => t.id === selectedProfilePlayer.teamId)} 
+          onClose={() => setSelectedProfilePlayer(null)} 
+        />
+      )}
     </div>
   );
 };

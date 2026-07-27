@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AppNotification, ThemeMode } from '../types';
+import { useBackHandler } from '../utils/backManager';
 import { 
   Bell, 
   CheckCheck, 
@@ -27,7 +28,7 @@ interface NotificationTrayProps {
 }
 
 export const NotificationTray: React.FC<NotificationTrayProps> = ({
-  notifications,
+  notifications = [],
   onMarkRead,
   onMarkAllRead,
   onClearAll,
@@ -39,10 +40,18 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'match_goal' | 'news' | 'admin_alert'>('all');
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  useBackHandler(() => {
+    if (isOpen) {
+      setIsOpen(false);
+      return true;
+    }
+    return false;
+  }, [isOpen]);
+
+  const unreadCount = (notifications || []).filter(n => !n.read).length;
   const isDark = theme === 'dark';
 
-  const filtered = notifications.filter(n => {
+  const filtered = (notifications || []).filter(n => {
     if (filter === 'all') return true;
     return n.type === filter;
   });
@@ -234,7 +243,7 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
                       </p>
 
                       <div className="text-[10px] text-slate-500 font-mono">
-                        {new Date(notif.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {new Date(notif.timestamp).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Lagos' })} WAT
                       </div>
                     </div>
                   </div>

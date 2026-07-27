@@ -1,0 +1,1 @@
+sed -i '/const \[teamFormCoach, setTeamFormCoach\] = useState<string>('\'''\');/a \  const [teamFormCoachPhotoUrl, setTeamFormCoachPhotoUrl] = useState<string>('\'''\');' src/components/AdminDashboard.tsx

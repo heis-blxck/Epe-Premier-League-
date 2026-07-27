@@ -1,0 +1,195 @@
+{
+  "entities": {
+    "Team": {
+      "title": "Team",
+      "description": "Football club team in the league",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "shortName": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "points": { "type": "number" },
+        "goalDifference": { "type": "number" }
+      }
+    },
+    "Player": {
+      "title": "Player",
+      "description": "League player",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "teamId": { "type": "string" },
+        "position": { "type": "string" },
+        "goals": { "type": "number" }
+      }
+    },
+    "Match": {
+      "title": "Match",
+      "description": "League fixture or result",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "homeTeamId": { "type": "string" },
+        "awayTeamId": { "type": "string" },
+        "homeScore": { "type": "number" },
+        "awayScore": { "type": "number" },
+        "status": { "type": "string" }
+      }
+    },
+    "MatchEvent": {
+      "title": "MatchEvent",
+      "description": "In-game match event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "matchId": { "type": "string" },
+        "teamId": { "type": "string" },
+        "playerId": { "type": "string" },
+        "eventType": { "type": "string" },
+        "minute": { "type": "number" }
+      }
+    },
+    "NewsArticle": {
+      "title": "NewsArticle",
+      "description": "League news article",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "content": { "type": "string" },
+        "publishedAt": { "type": "string" }
+      }
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Registered user profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" }
+      }
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Administrator account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" }
+      }
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Application configuration settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "appName": { "type": "string" },
+        "leagueSeason": { "type": "string" }
+      }
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "System or user notifications",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "Rating": {
+      "title": "Rating",
+      "description": "Player rating entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "rating": { "type": "object" }
+      }
+    },
+    "MatchPrediction": {
+      "title": "MatchPrediction",
+      "description": "Match score prediction",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "matchId": { "type": "string" },
+        "userId": { "type": "string" }
+      }
+    },
+    "FantasySquad": {
+      "title": "FantasySquad",
+      "description": "Fantasy manager team squad",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    },
+    "MiniLeague": {
+      "title": "MiniLeague",
+      "description": "Fantasy mini league competition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" }
+      }
+    },
+    "Advertisement": {
+      "title": "Advertisement",
+      "description": "Sponsor banner advertisement",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "imageUrl": { "type": "string" }
+      }
+    },
+    "PlayerOfTheWeek": {
+      "title": "PlayerOfTheWeek",
+      "description": "Weekly top performing player award",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "playerId": { "type": "string" },
+        "week": { "type": "number" }
+      }
+    },
+    "ManagerChips": {
+      "title": "ManagerChips",
+      "description": "Active fantasy chip state per user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/teams/{teamId}": { "schema": "Team", "description": "Teams in the league" },
+    "/players/{playerId}": { "schema": "Player", "description": "Players in the league" },
+    "/matches/{matchId}": { "schema": "Match", "description": "Match fixtures and results" },
+    "/events/{eventId}": { "schema": "MatchEvent", "description": "In-game events" },
+    "/news/{newsId}": { "schema": "NewsArticle", "description": "News articles" },
+    "/users/{userId}": { "schema": "UserAccount", "description": "User accounts" },
+    "/admins/{adminId}": { "schema": "AdminUser", "description": "Admin users" },
+    "/settings/{settingId}": { "schema": "AppSettings", "description": "Global application settings" },
+    "/notifications/{notifId}": { "schema": "AppNotification", "description": "Notifications" },
+    "/ratings/{ratingId}": { "schema": "Rating", "description": "Player match ratings" },
+    "/predictions/{predictionId}": { "schema": "MatchPrediction", "description": "User match predictions" },
+    "/fantasySquads/{squadId}": { "schema": "FantasySquad", "description": "Fantasy manager squads" },
+    "/miniLeagues/{leagueId}": { "schema": "MiniLeague", "description": "Fantasy mini leagues" },
+    "/advertisements/{adId}": { "schema": "Advertisement", "description": "Sponsor advertisements" },
+    "/playerOfTheWeek/{potwId}": { "schema": "PlayerOfTheWeek", "description": "Player of the week awards" },
+    "/managerChips/{chipId}": { "schema": "ManagerChips", "description": "Fantasy manager active chips" }
+  }
+}

@@ -1,8 +1,23 @@
-import React, { useState, useEffect } from 'react';
-import { Match, Team, Player, MatchPeriod, EventType, MatchEvent, LineupPlayer, AdminUser, AppSettings, MatchStats, NewsArticle } from '../types';
-import { api } from '../services/api';
-import { MediaUploader } from './MediaUploader';
+import React, { useState, useEffect, useRef } from 'react';
+import { useBackHandler } from '../utils/backManager';
 import {
+  Match, Team, Player, MatchPeriod, EventType, GoalType, MatchEvent, LineupPlayer, AdminUser, AppSettings, MatchStats, NewsArticle } from '../types';
+import { api } from '../services/api';
+import { useMatchClock, calculateMatchClock } from '../utils/matchClock';
+import { MediaUploader } from './MediaUploader';
+import { RatingBadge } from './RatingBadge';
+import { BulkUploadManager } from './BulkUploadManager';
+import { BulkTeamUploadManager } from './BulkTeamUploadManager';
+import { PlayerAvailabilityManager } from './PlayerAvailabilityManager';
+import { AdsManager } from './AdsManager';
+import { PotmManager } from './PotmManager';
+import { PlayerValuationManager } from './PlayerValuationManager';
+import { LineupBuilder } from './LineupBuilder';
+import { VerifiedBadge } from './VerifiedBadge';
+import { EplHighlightAdmin } from './EplHighlightAdmin';
+import { VideoHighlightsAdmin } from './VideoHighlightsAdmin';
+import {
+  Trophy,
   ShieldAlert,
   Play,
   Pause,
@@ -15,6 +30,7 @@ import {
   Trash2,
   Check,
   CheckCircle,
+  X,
   RefreshCw,
   Plus,
   ArrowRightLeft,
@@ -35,7 +51,10 @@ import {
   Upload,
   Calendar,
   AlertTriangle,
-  Download
+  Download,
+  Goal,
+  Megaphone,
+  Shield
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -49,7 +68,7 @@ interface AdminDashboardProps {
   isAdmin: boolean;
   isSuperAdmin: boolean;
   admins: AdminUser[];
-  onAppointAdmin: (email: string, name: string, role: 'super_admin' | 'sub_admin' | 'news_reporter') => Promise<void>;
+  onAppointAdmin: (email: string, name: string, role: 'super_admin' | 'sub_admin' | 'news_reporter' | 'official_league' | 'OFFICIAL_LEAGUE') => Promise<void>;
   onDismissAdmin: (email: string) => Promise<void>;
   settings?: AppSettings;
   onUpdateSettings?: (settings: Partial<AppSettings>) => Promise<void>;
@@ -71,15 +90,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   settings,
   onUpdateSettings
 }) => {
-  const [adminTab, setAdminTab] = useState<'controller' | 'events' | 'ratings' | 'squads' | 'transfers' | 'players' | 'teams' | 'standings' | 'branding' | 'news' | 'admins' | 'fixtures'>('controller');
+  const [activePanel, setActivePanel] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [adminTab, setAdminTab] = useState<'controller' | 'events' | 'ratings' | 'squads' | 'transfers' | 'players' | 'teams' | 'standings' | 'branding' | 'news' | 'highlights' | 'videos' | 'admins' | 'fixtures' | 'bulk_upload' | 'bulk_teams' | 'valuations' | 'availability' | 'ads' | 'potm' | 'lineups'>('controller');
 
   const isNewsReporter = currentAdmin?.role === 'news_reporter';
+  const isOfficialLeague = currentAdmin?.role === 'official_league' || currentAdmin?.role === 'OFFICIAL_LEAGUE' || currentAdmin?.role === 'spokesperson';
+  const isSubAdmin = currentAdmin?.role === 'sub_admin';
+  const isLimitedMediaRole = isNewsReporter || (isOfficialLeague && !isSuperAdmin);
 
   useEffect(() => {
     if (isNewsReporter) {
+      setActivePanel(5);
       setAdminTab('news');
+    } else if (isOfficialLeague && !isSuperAdmin) {
+      if (!['news', 'videos', 'highlights', 'potm'].includes(adminTab)) {
+        setActivePanel(5);
+        setAdminTab('news');
+      }
+    } else if (isSubAdmin && !isSuperAdmin) {
+      if (!['controller', 'lineups', 'events', 'ratings'].includes(adminTab)) {
+        setActivePanel(1);
+        setAdminTab('controller');
+      }
     }
-  }, [isNewsReporter]);
+  }, [isNewsReporter, isOfficialLeague, isSubAdmin, isSuperAdmin, adminTab]);
 
   // Selected Match for actions
   const [selectedMatchId, setSelectedMatchId] = useState<string>(matches[0]?.id || '');
@@ -87,10 +121,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Feedback Toast
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const showToast = (msg: string) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = null;
+    }
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3000);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMsg(null);
+      toastTimeoutRef.current = null;
+    }, 3500);
   };
 
   // 1. LIVE MATCH CONTROLLER & STATS STATES
@@ -108,32 +150,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [statsAwayShotsOnTarget, setStatsAwayShotsOnTarget] = useState<number>(selectedMatch?.stats?.awayShotsOnTarget || 3);
   const [statsHomeCorners, setStatsHomeCorners] = useState<number>(selectedMatch?.stats?.homeCorners || 5);
   const [statsAwayCorners, setStatsAwayCorners] = useState<number>(selectedMatch?.stats?.awayCorners || 4);
+  
   const [statsHomeFouls, setStatsHomeFouls] = useState<number>(selectedMatch?.stats?.homeFouls || 8);
   const [statsAwayFouls, setStatsAwayFouls] = useState<number>(selectedMatch?.stats?.awayFouls || 11);
 
-  // Live match ticker interval effect
-  useEffect(() => {
-    let interval: any = null;
-    if (isTimerRunning && selectedMatch) {
-      interval = setInterval(() => {
-        setClockMinute(m => {
-          const next = m + 1;
-          api.saveMatch({ id: selectedMatch.id, matchMinute: next });
-          return next;
-        });
-      }, 3000); // ticks every 3 seconds for smooth real-time match simulation
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isTimerRunning, selectedMatch]);
+  // MOTM & Bonus Points states
+  const [motmPlayerId, setMotmPlayerId] = useState<string>(selectedMatch?.motmPlayerId || '');
+  const [motmGraphicUrl, setMotmGraphicUrl] = useState<string>(selectedMatch?.motmGraphicUrl || '');
+  const [bonusFirstPlace, setBonusFirstPlace] = useState<string>(selectedMatch?.bonusPointsAllocations?.firstPlacePlayerId || '');
+  const [bonusSecondPlace, setBonusSecondPlace] = useState<string>(selectedMatch?.bonusPointsAllocations?.secondPlacePlayerId || '');
+  const [bonusThirdPlace, setBonusThirdPlace] = useState<string>(selectedMatch?.bonusPointsAllocations?.thirdPlacePlayerId || '');
+
+
+  // Penalty Shootout Scores State
+  const [homePenalties, setHomePenalties] = useState<number>(selectedMatch?.homePenalties || 0);
+  const [awayPenalties, setAwayPenalties] = useState<number>(selectedMatch?.awayPenalties || 0);
+
+  // Live timestamp match clock hook (consumes zero continuous database reads/writes)
+  const liveClock = useMatchClock(selectedMatch);
 
   // Sync state when selected match changes
   useEffect(() => {
     if (selectedMatch) {
-      setClockMinute(selectedMatch.matchMinute || 0);
-      setStoppage1st(selectedMatch.stoppageTime1stHalf || 2);
-      setStoppage2nd(selectedMatch.stoppageTime2ndHalf || 4);
+      setClockMinute(liveClock.calculatedMinute || selectedMatch.matchMinute || 0);
+      setStoppage1st(selectedMatch.firstHalfStoppage ?? selectedMatch.stoppageTime1stHalf ?? 2);
+      setStoppage2nd(selectedMatch.secondHalfStoppage ?? selectedMatch.stoppageTime2ndHalf ?? 4);
+      setHomePenalties(selectedMatch.homePenalties || 0);
+      setAwayPenalties(selectedMatch.awayPenalties || 0);
       const st = selectedMatch.stats || {
         homePossession: 50,
         awayPossession: 50,
@@ -156,12 +199,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setStatsAwayCorners(st.awayCorners);
       setStatsHomeFouls(st.homeFouls);
       setStatsAwayFouls(st.awayFouls);
+
+      setMotmPlayerId(selectedMatch.manOfTheMatchPlayerId || selectedMatch.motmPlayerId || '');
+      setMotmGraphicUrl(selectedMatch.motmGraphicUrl || '');
+      setBonusFirstPlace(selectedMatch.fantasyBonus1stPlayerId || selectedMatch.bonusPointsAllocations?.firstPlacePlayerId || '');
+      setBonusSecondPlace(selectedMatch.fantasyBonus2ndPlayerId || selectedMatch.bonusPointsAllocations?.secondPlacePlayerId || '');
+      setBonusThirdPlace(selectedMatch.fantasyBonus3rdPlayerId || selectedMatch.bonusPointsAllocations?.thirdPlacePlayerId || '');
     }
   }, [selectedMatchId, matches]);
+
+  // QUICK GOAL INSTANT TRIGGER STATES
+  const [quickGoalModalOpen, setQuickGoalModalOpen] = useState<boolean>(false);
+  const [quickGoalData, setQuickGoalData] = useState<{
+    side: 'home' | 'away';
+    teamId: string;
+    teamName: string;
+    newHomeScore: number;
+    newAwayScore: number;
+    minute: number;
+  } | null>(null);
+
+  const [quickGoalPlayerId, setQuickGoalPlayerId] = useState<string>('');
+  const [quickGoalAssisterId, setQuickGoalAssisterId] = useState<string>('');
+  const [quickGoalType, setQuickGoalType] = useState<GoalType>('standard');
+  const [quickGoalMinute, setQuickGoalMinute] = useState<number>(1);
+  const [quickGoalSavingDetails, setQuickGoalSavingDetails] = useState<boolean>(false);
 
   // 2. LIVE EVENT LOGGER STATES
   const [eventModalOpen, setEventModalOpen] = useState<boolean>(false);
   const [eventTypeToLog, setEventTypeToLog] = useState<EventType>('Goal');
+  const [goalTypeToLog, setGoalTypeToLog] = useState<GoalType>('standard');
   const [eventTeamId, setEventTeamId] = useState<string>(selectedMatch?.homeTeamId || '');
   const [eventPlayerId, setEventPlayerId] = useState<string>('');
   const [eventCustomPlayerName, setEventCustomPlayerName] = useState<string>('');
@@ -201,6 +268,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [playerFormBio, setPlayerFormBio] = useState<string>('');
   const [playerRosterTeamFilter, setPlayerRosterTeamFilter] = useState<string>('all');
   const [deletingPlayerIdConfirm, setDeletingPlayerIdConfirm] = useState<string | null>(null);
+  const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
+  const [showBulkDeletePlayerConfirm, setShowBulkDeletePlayerConfirm] = useState<boolean>(false);
+  const [isBulkDeletingPlayers, setIsBulkDeletingPlayers] = useState<boolean>(false);
   const [isSavingPlayer, setIsSavingPlayer] = useState<boolean>(false);
 
   // Helper to normalize position code cleanly
@@ -230,6 +300,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [teamFormShort, setTeamFormShort] = useState<string>('');
   const [teamFormLogo, setTeamFormLogo] = useState<string>('');
   const [teamFormCoach, setTeamFormCoach] = useState<string>('');
+  const [teamFormCoachPhotoUrl, setTeamFormCoachPhotoUrl] = useState<string>('');
   const [teamFormStadium, setTeamFormStadium] = useState<string>('');
 
   // 8. BRANDING & SETTINGS STATES (SUPER ADMIN)
@@ -237,18 +308,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [brandLogoUrl, setBrandLogoUrl] = useState<string>(settings?.appLogoUrl || '');
   const [brandColor, setBrandColor] = useState<string>(settings?.primaryColor || '#800020');
   const [brandSeason, setBrandSeason] = useState<string>(settings?.seasonLabel || '2026 Season');
+  const [visionText, setVisionText] = useState<string>(settings?.visionText || '');
+  const [leadership, setLeadership] = useState<{name: string, role: string, imageUrl: string}[]>(
+    settings?.leadership || [
+      { name: 'Mujib Bankole-Otedola', role: 'Committee Chair', imageUrl: '' },
+      { name: 'Ayodele Adio', role: 'FA President', imageUrl: '' },
+      { name: 'Ahmad Garbadeen', role: 'Lead Developer', imageUrl: '' }
+    ]
+  );
 
   useEffect(() => {
     if (settings) {
       setBrandAppName(settings.appName);
       setBrandLogoUrl(settings.appLogoUrl);
       setBrandColor(settings.primaryColor);
-      setBrandSeason(settings.seasonLabel);
+      setBrandSeason(settings.seasonLabel || settings.leagueSeason || '2026 Season');
+      if (settings.visionText) setVisionText(settings.visionText);
+      if (settings.leadership) setLeadership(settings.leadership);
     }
   }, [settings]);
 
   // 9. SUBSTACK NEWS PUBLISHER STATES
   const [editingNewsId, setEditingNewsId] = useState<string | null>(null);
+
+  useBackHandler(() => {
+    if (editingPlayerId) {
+      setEditingPlayerId(null);
+      return true;
+    }
+    if (editingTeamId) {
+      setEditingTeamId(null);
+      return true;
+    }
+    if (editingNewsId) {
+      setEditingNewsId(null);
+      return true;
+    }
+    return false;
+  }, [editingPlayerId, editingTeamId, editingNewsId]);
   const [newsFilter, setNewsFilter] = useState<'all' | 'pending' | 'published' | 'draft'>('all');
   const [newsTitle, setNewsTitle] = useState<string>('');
   const [newsSubtitle, setNewsSubtitle] = useState<string>('');
@@ -267,7 +364,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 10. SUB-ADMIN APPOINTMENT STATES
   const [appointEmail, setAppointEmail] = useState('');
   const [appointName, setAppointName] = useState('');
-  const [appointRole, setAppointRole] = useState<'sub_admin' | 'super_admin' | 'news_reporter'>('sub_admin');
+  const [appointRole, setAppointRole] = useState<'sub_admin' | 'super_admin' | 'news_reporter' | 'official_league'>('sub_admin');
   const [isAppointing, setIsAppointing] = useState(false);
 
   // 11. DATA RESET CONFIRMATION STATES (SUPER ADMIN EXCLUSIVE)
@@ -277,9 +374,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [fixtureFormHomeTeam, setFixtureFormHomeTeam] = useState<string>(teams[0]?.id || '');
   const [fixtureFormAwayTeam, setFixtureFormAwayTeam] = useState<string>(teams[1]?.id || '');
   const [fixtureFormMatchday, setFixtureFormMatchday] = useState<number>(1);
+  const [finalizeGameweekId, setFinalizeGameweekId] = useState<number>(1);
   const [fixtureFormDate, setFixtureFormDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [fixtureFormTime, setFixtureFormTime] = useState<string>('16:00');
   const [fixtureFormVenue, setFixtureFormVenue] = useState<string>('');
+  const [fixtureFormCompetitionType, setFixtureFormCompetitionType] = useState<'League' | 'Cup'>('League');
   const [isSavingFixture, setIsSavingFixture] = useState<boolean>(false);
 
   // Sync fixture form team defaults when teams arrive
@@ -323,13 +422,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const list = Array.isArray(jsonData) ? jsonData : [jsonData];
         const parsed = list.map((item: any) => {
           const homeT = teams.find(t => 
-            t.name.toLowerCase() === (item.homeTeam || item.homeTeamName || '').toLowerCase() ||
-            t.shortName.toLowerCase() === (item.homeTeam || item.homeTeamName || '').toLowerCase() ||
+            (t.name || '').toLowerCase() === (item.homeTeam || item.homeTeamName || '').toLowerCase() ||
+            (t.shortName || '').toLowerCase() === (item.homeTeam || item.homeTeamName || '').toLowerCase() ||
             t.id === item.homeTeamId
           );
           const awayT = teams.find(t => 
-            t.name.toLowerCase() === (item.awayTeam || item.awayTeamName || '').toLowerCase() ||
-            t.shortName.toLowerCase() === (item.awayTeam || item.awayTeamName || '').toLowerCase() ||
+            (t.name || '').toLowerCase() === (item.awayTeam || item.awayTeamName || '').toLowerCase() ||
+            (t.shortName || '').toLowerCase() === (item.awayTeam || item.awayTeamName || '').toLowerCase() ||
             t.id === item.awayTeamId
           );
           
@@ -399,17 +498,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
 
         const homeT = teams.find(t => 
-          t.name.toLowerCase() === homeStr.toLowerCase() ||
-          t.shortName.toLowerCase() === homeStr.toLowerCase() ||
+          (t.name || '').toLowerCase() === (homeStr || '').toLowerCase() ||
+          (t.shortName || '').toLowerCase() === (homeStr || '').toLowerCase() ||
           t.id === homeStr ||
-          t.name.toLowerCase().includes(homeStr.toLowerCase())
+          (t.name || '').toLowerCase().includes((homeStr || '').toLowerCase())
         );
 
         const awayT = teams.find(t => 
-          t.name.toLowerCase() === awayStr.toLowerCase() ||
-          t.shortName.toLowerCase() === awayStr.toLowerCase() ||
+          (t.name || '').toLowerCase() === (awayStr || '').toLowerCase() ||
+          (t.shortName || '').toLowerCase() === (awayStr || '').toLowerCase() ||
           t.id === awayStr ||
-          t.name.toLowerCase().includes(awayStr.toLowerCase())
+          (t.name || '').toLowerCase().includes((awayStr || '').toLowerCase())
         );
 
         const isValid = !!(homeT && awayT && homeT.id !== awayT.id);
@@ -484,6 +583,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         date: fixtureFormDate,
         time: fixtureFormTime,
         venue: fixtureFormVenue.trim() || homeT?.stadium || 'Epe Township Stadium',
+        competition_type: fixtureFormCompetitionType,
         status: 'Scheduled',
         period: 'Pre-Match',
         homeScore: 0,
@@ -571,21 +671,152 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // HANDLE STATUS UPDATE
-  const handleUpdateStatus = async (period: MatchPeriod) => {
+  const handleStart1stHalf = async () => {
     if (!selectedMatch) return;
-    let status: 'Scheduled' | 'Live' | 'Half-Time' | 'Full-Time' = 'Scheduled';
-    if (period === '1st Half' || period === '2nd Half') status = 'Live';
-    if (period === 'Half-Time') status = 'Half-Time';
-    if (period === 'Full-Time') status = 'Full-Time';
-
+    const nowIso = new Date().toISOString();
     try {
       await api.saveMatch({
         id: selectedMatch.id,
+        status: 'Live',
+        period: '1st Half',
+        firstHalfStartTime: nowIso,
+        firstHalfStoppage: Number(stoppage1st),
+        stoppageTime1stHalf: Number(stoppage1st),
+        matchMinute: 0
+      });
+      showToast('1st Half Started (40-min half clock ticking)!');
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error starting 1st Half: ${e.message}`);
+    }
+  };
+
+  const handleEnd1stHalf = async () => {
+    if (!selectedMatch) return;
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        status: 'Half-Time',
+        period: 'Half-Time',
+        matchMinute: 40
+      });
+      showToast('1st Half Ended (Half-Time)!');
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error ending 1st Half: ${e.message}`);
+    }
+  };
+
+  const handleStart2ndHalf = async () => {
+    if (!selectedMatch) return;
+    const nowIso = new Date().toISOString();
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        status: 'Live',
+        period: '2nd Half',
+        secondHalfStartTime: nowIso,
+        secondHalfStoppage: Number(stoppage2nd),
+        stoppageTime2ndHalf: Number(stoppage2nd),
+        matchMinute: 40
+      });
+      showToast('2nd Half Started (40-min half clock ticking)!');
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error starting 2nd Half: ${e.message}`);
+    }
+  };
+
+  const handleEndMatch = async () => {
+    if (!selectedMatch) return;
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        status: 'Full-Time',
+        period: 'Full-Time',
+        matchMinute: 80
+      });
+      showToast('Match Ended (Full-Time)!');
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error ending match: ${e.message}`);
+    }
+  };
+
+  const handleSet1stHalfExtraTime = async () => {
+    if (!selectedMatch) return;
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        firstHalfStoppage: Number(stoppage1st),
+        stoppageTime1stHalf: Number(stoppage1st)
+      });
+      showToast(`1st Half Stoppage Time set to +${stoppage1st}'`);
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error setting stoppage time: ${e.message}`);
+    }
+  };
+
+  const handleSet2ndHalfExtraTime = async () => {
+    if (!selectedMatch) return;
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        secondHalfStoppage: Number(stoppage2nd),
+        stoppageTime2ndHalf: Number(stoppage2nd)
+      });
+      showToast(`2nd Half Stoppage Time set to +${stoppage2nd}'`);
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error setting stoppage time: ${e.message}`);
+    }
+  };
+
+  const handleUpdateStatus = async (period: MatchPeriod, customStatus?: 'Scheduled' | 'Live' | 'Half-Time' | 'Full-Time' | 'Penalties') => {
+    if (!selectedMatch) return;
+    let status: 'Scheduled' | 'Live' | 'Half-Time' | 'Full-Time' | 'Penalties' = customStatus || 'Scheduled';
+    if (!customStatus) {
+      if (period === '1st Half' || period === '2nd Half') status = 'Live';
+      if (period === 'Half-Time') status = 'Half-Time';
+      if (period === 'Full-Time') status = 'Full-Time';
+    }
+
+    try {
+      
+      await api.saveMatch({
+        id: selectedMatch.id,
+        motmPlayerId,
+        motmGraphicUrl,
+        bonusPointsAllocations: {
+          firstPlacePlayerId: bonusFirstPlace,
+          secondPlacePlayerId: bonusSecondPlace,
+          thirdPlacePlayerId: bonusThirdPlace
+        },
+
         period,
         status,
-        matchMinute: clockMinute
+        matchMinute: clockMinute,
+        homePenalties: homePenalties,
+        awayPenalties: awayPenalties
       });
-      showToast(`Match status updated to ${period}`);
+      showToast(`Match status updated to ${customStatus || period}`);
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error: ${e.message}`);
+    }
+  };
+
+  const handleSavePenalties = async () => {
+    if (!selectedMatch) return;
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        status: 'Penalties',
+        homePenalties: Number(homePenalties),
+        awayPenalties: Number(awayPenalties)
+      });
+      showToast(`Penalty Shootout Scores Saved (${homePenalties} - ${awayPenalties} PKs)!`);
       onRefreshAll();
     } catch (e: any) {
       showToast(`Error: ${e.message}`);
@@ -607,28 +838,146 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // INSTANT QUICK GOAL TRIGGER (Home or Away)
+  const handleQuickGoal = async (side: 'home' | 'away') => {
+    if (!selectedMatch) return;
+
+    const currentHome = Number(selectedMatch.homeScore || 0);
+    const currentAway = Number(selectedMatch.awayScore || 0);
+    const newHome = side === 'home' ? currentHome + 1 : currentHome;
+    const newAway = side === 'away' ? currentAway + 1 : currentAway;
+    const teamId = side === 'home' ? selectedMatch.homeTeamId : selectedMatch.awayTeamId;
+    const teamObj = side === 'home' ? selectedMatch.homeTeam : selectedMatch.awayTeam;
+    const teamName = teamObj?.shortName || teamObj?.name || (side === 'home' ? 'Home' : 'Away');
+    const min = liveClock.calculatedMinute || selectedMatch.matchMinute || 1;
+
+    try {
+      // 1. INSTANT DB & SCORE UPDATE IN FIRESTORE / BACKEND
+      await api.saveMatch({
+        id: selectedMatch.id,
+        homeScore: newHome,
+        awayScore: newAway
+      });
+
+      // PUSH STAGE 1 HIGH-PRIORITY GOAL NOTIFICATION
+      try {
+        await api.createNotification({
+          title: `⚽ GOAL! ${teamName} scores!`,
+          message: `${selectedMatch.homeTeam?.shortName || 'Home'} ${newHome} - ${newAway} ${selectedMatch.awayTeam?.shortName || 'Away'} (${min}')`,
+          type: 'match_goal',
+          eventType: 'Goal',
+          linkMatchId: selectedMatch.id
+        });
+      } catch (notifErr) {
+        console.error('Error creating Stage 1 notification:', notifErr);
+      }
+
+      showToast(`⚽ GOAL! Score instantly updated: ${selectedMatch.homeTeam?.shortName || 'HOME'} ${newHome} - ${newAway} ${selectedMatch.awayTeam?.shortName || 'AWAY'}`);
+
+      // Push real-time refresh to connected fans & state
+      onRefreshAll();
+
+      // 2. OPEN PROMPT FOR GOALSCORER & ASSIST DETAILS
+      setQuickGoalData({
+        side,
+        teamId,
+        teamName,
+        newHomeScore: newHome,
+        newAwayScore: newAway,
+        minute: min
+      });
+      setQuickGoalPlayerId('');
+      setQuickGoalAssisterId('');
+      setQuickGoalType('standard');
+      setQuickGoalMinute(min);
+      setQuickGoalModalOpen(true);
+    } catch (err: any) {
+      showToast(`Error updating score: ${err.message || 'Failed to update live score'}`);
+    }
+  };
+
+  // SAVE QUICK GOAL DETAILS & EVENT
+  const handleSaveQuickGoalDetails = async () => {
+    if (!selectedMatch || !quickGoalData) return;
+    setQuickGoalSavingDetails(true);
+    try {
+      const teamPlayers = players.filter(p => p.teamId === quickGoalData.teamId);
+      const scorerObj = teamPlayers.find(p => p.id === quickGoalPlayerId);
+      const assisterObj = teamPlayers.find(p => p.id === quickGoalAssisterId);
+
+      const scorerName = scorerObj ? scorerObj.name : 'Goalscorer';
+      const assisterName = assisterObj ? assisterObj.name : undefined;
+
+      await api.addEvent(selectedMatch.id, {
+        teamId: quickGoalData.teamId,
+        playerId: quickGoalPlayerId || 'unassigned',
+        playerName: scorerName,
+        assisterId: quickGoalAssisterId || undefined,
+        assisterName: assisterName,
+        eventType: 'Goal',
+        goalType: quickGoalType,
+        minute: Number(quickGoalMinute || quickGoalData.minute || 1),
+        detail: quickGoalType === 'penalty' ? 'Penalty Goal' : quickGoalType === 'own_goal' ? 'Own Goal' : 'Goal',
+        skipScoreIncrement: true
+      });
+
+      // PUSH STAGE 2 DETAILED PLAYER NOTIFICATION
+      try {
+        await api.createNotification({
+          title: `⚽ Goal Detail: ${scorerName}`,
+          message: `⚽ ${scorerName} scores!${assisterName ? ` (Assist: ${assisterName})` : ''} (${quickGoalMinute || quickGoalData.minute || 1}')`,
+          type: 'match_goal',
+          eventType: 'Goal',
+          linkMatchId: selectedMatch.id
+        });
+      } catch (notifErr) {
+        console.error('Error creating Stage 2 notification:', notifErr);
+      }
+
+      showToast(`Goal details saved for ${scorerName}! Player stats updated.`);
+      setQuickGoalModalOpen(false);
+      setQuickGoalData(null);
+      onRefreshAll();
+    } catch (err: any) {
+      showToast(`Error logging goal details: ${err.message}`);
+    } finally {
+      setQuickGoalSavingDetails(false);
+    }
+  };
+
   // SAVE GAME DETAILED STATISTICS
   const handleSaveMatchStats = async () => {
     if (!selectedMatch) return;
     try {
       const statsObj: MatchStats = {
-        homePossession: Number(statsHomePossession),
-        awayPossession: Number(statsAwayPossession),
-        homeShots: Number(statsHomeShots),
-        awayShots: Number(statsAwayShots),
-        homeShotsOnTarget: Number(statsHomeShotsOnTarget),
-        awayShotsOnTarget: Number(statsAwayShotsOnTarget),
-        homeCorners: Number(statsHomeCorners),
-        awayCorners: Number(statsAwayCorners),
-        homeFouls: Number(statsHomeFouls),
-        awayFouls: Number(statsAwayFouls)
+        homePossession: Number(statsHomePossession) || 0,
+        awayPossession: Number(statsAwayPossession) || 0,
+        homeShots: Number(statsHomeShots) || 0,
+        awayShots: Number(statsAwayShots) || 0,
+        homeShotsOnTarget: Number(statsHomeShotsOnTarget) || 0,
+        awayShotsOnTarget: Number(statsAwayShotsOnTarget) || 0,
+        homeCorners: Number(statsHomeCorners) || 0,
+        awayCorners: Number(statsAwayCorners) || 0,
+        homeFouls: Number(statsHomeFouls) || 0,
+        awayFouls: Number(statsAwayFouls) || 0
       };
 
       await api.saveMatch({
         id: selectedMatch.id,
-        stats: statsObj
+        stats: statsObj,
+        motmPlayerId: motmPlayerId || undefined,
+        manOfTheMatchPlayerId: motmPlayerId || undefined,
+        motmGraphicUrl: motmGraphicUrl || undefined,
+        bonusPointsAllocations: {
+          firstPlacePlayerId: bonusFirstPlace || undefined,
+          secondPlacePlayerId: bonusSecondPlace || undefined,
+          thirdPlacePlayerId: bonusThirdPlace || undefined
+        },
+        fantasyBonus1stPlayerId: bonusFirstPlace || undefined,
+        fantasyBonus2ndPlayerId: bonusSecondPlace || undefined,
+        fantasyBonus3rdPlayerId: bonusThirdPlace || undefined
       });
-      showToast(`Match detailed statistics saved!`);
+      showToast(`Match detailed statistics and awards saved!`);
       onRefreshAll();
     } catch (e: any) {
       showToast(`Error saving match stats: ${e.message}`);
@@ -636,8 +985,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // OPEN LOG EVENT MODAL
-  const handleOpenEventModal = (type: EventType) => {
+  const handleOpenEventModal = (type: EventType, gType: GoalType = 'standard') => {
     setEventTypeToLog(type);
+    if (type === 'Goal') {
+      setGoalTypeToLog(gType);
+    }
     setEventMinute(clockMinute || selectedMatch?.matchMinute || 1);
     if (selectedMatch) {
       setEventTeamId(selectedMatch.homeTeamId);
@@ -685,6 +1037,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         playerId: eventPlayerId || `custom-${Date.now()}`,
         playerName: mainPlayerName,
         eventType: eventTypeToLog,
+        goalType: eventTypeToLog === 'Goal' ? goalTypeToLog : undefined,
         minute: Number(eventMinute || clockMinute || 1),
         detail: eventDetail,
         assisterId: eventAssisterId || undefined,
@@ -776,9 +1129,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await api.deletePlayer(pId);
       showToast(`Player ${pName} deleted`);
       setDeletingPlayerIdConfirm(null);
+      setSelectedPlayerIds(prev => prev.filter(id => id !== pId));
       onRefreshAll();
     } catch (err: any) {
       showToast(err.message || 'Failed to delete player');
+    }
+  };
+
+  // BULK DELETE PLAYERS
+  const handleBulkDeletePlayers = async () => {
+    if (selectedPlayerIds.length === 0) return;
+    setIsBulkDeletingPlayers(true);
+    try {
+      await api.deletePlayersBulk(selectedPlayerIds);
+      showToast(`Successfully deleted ${selectedPlayerIds.length} players!`);
+      setSelectedPlayerIds([]);
+      setShowBulkDeletePlayerConfirm(false);
+      onRefreshAll();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to bulk delete players');
+    } finally {
+      setIsBulkDeletingPlayers(false);
     }
   };
 
@@ -798,6 +1169,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         shortName: teamFormShort.trim() || teamFormName.trim().slice(0, 3).toUpperCase(),
         logoUrl: teamFormLogo || 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=120&q=80',
         coach: teamFormCoach.trim() || 'Head Coach',
+        coachPhotoUrl: teamFormCoachPhotoUrl.trim() || undefined,
         stadium: teamFormStadium.trim() || 'Epe Arena'
       });
 
@@ -807,6 +1179,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setTeamFormShort('');
       setTeamFormLogo('');
       setTeamFormCoach('');
+                        setTeamFormCoachPhotoUrl('');
       setTeamFormStadium('');
       onRefreshAll();
     } catch (err: any) {
@@ -842,7 +1215,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         appName: brandAppName,
         appLogoUrl: brandLogoUrl,
         primaryColor: brandColor,
-        seasonLabel: brandSeason
+        seasonLabel: brandSeason,
+        visionText: visionText,
+        leadership: leadership
       });
       showToast('League app branding & icon updated!');
     } catch (err: any) {
@@ -853,10 +1228,79 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   return (
     <div className="space-y-6">
       {/* Toast Feedback */}
+      
+      {/* FIXED BOTTOM NAV FOR ADMIN */}
+      <div 
+        className="fixed bottom-0 left-0 right-0 w-full z-[9999] bg-[#800020] border-t border-[#5a0016] shadow-[0_-10px_30px_-10px_rgba(128,0,32,0.4)] pb-safe m-0"
+        style={{ position: 'fixed', bottom: 0, left: 0, right: 0, width: '100%', zIndex: 9999, margin: 0 }}
+      >
+        <div className="flex items-center justify-around max-w-lg mx-auto py-2 px-2">
+          {!isLimitedMediaRole && (
+            <>
+              <button
+                onClick={() => { setActivePanel(1); setAdminTab('fixtures'); }}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 1 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+              >
+                <Play className={`transition-all ${activePanel === 1 ? 'w-6 h-6' : 'w-5 h-5'}`} />
+                <span className={`font-bold tracking-wide transition-all ${activePanel === 1 ? 'text-[11px]' : 'text-[10px]'}`}>Matches</span>
+              </button>
+              <button
+                onClick={() => { setActivePanel(2); setAdminTab('standings'); }}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 2 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+              >
+                <Shield className={`transition-all ${activePanel === 2 ? 'w-6 h-6' : 'w-5 h-5'}`} />
+                <span className={`font-bold tracking-wide transition-all ${activePanel === 2 ? 'text-[11px]' : 'text-[10px]'}`}>Clubs</span>
+              </button>
+              <button
+                onClick={() => { 
+                  setActivePanel(3); 
+                  setAdminTab('players'); 
+                  window.dispatchEvent(new Event('reset-profile-tab'));
+                }}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 3 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+              >
+                <Users className={`transition-all ${activePanel === 3 ? 'w-6 h-6' : 'w-5 h-5'}`} />
+                <span className={`font-bold tracking-wide transition-all ${activePanel === 3 ? 'text-[11px]' : 'text-[10px]'}`}>Profiles</span>
+              </button>
+              <button
+                onClick={() => { setActivePanel(4); setAdminTab('valuations'); }}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 4 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+              >
+                <Sparkles className={`transition-all ${activePanel === 4 ? 'w-6 h-6' : 'w-5 h-5'}`} />
+                <span className={`font-bold tracking-wide transition-all ${activePanel === 4 ? 'text-[11px]' : 'text-[10px]'}`}>Fantasy</span>
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => { setActivePanel(5); setAdminTab('news'); }}
+            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 5 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+          >
+            <Sliders className={`transition-all ${activePanel === 5 ? 'w-6 h-6' : 'w-5 h-5'}`} />
+            <span className={`font-bold tracking-wide transition-all ${activePanel === 5 ? 'text-[11px]' : 'text-[10px]'}`}>Controls</span>
+          </button>
+        </div>
+      </div>
+
       {toastMsg && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-amber-300 font-extrabold px-5 py-3 rounded-2xl shadow-2xl border border-amber-400 flex items-center gap-2 animate-bounce">
-          <Check className="w-5 h-5 text-emerald-400" />
-          <span>{toastMsg}</span>
+        <div className="fixed bottom-6 right-6 z-[100] bg-slate-900 text-amber-300 font-extrabold px-5 py-3 rounded-2xl shadow-2xl border border-amber-400 flex items-center justify-between gap-3 animate-bounce max-w-md">
+          <div className="flex items-center gap-2">
+            <Check className="w-5 h-5 text-emerald-400 shrink-0" />
+            <span className="text-xs sm:text-sm">{toastMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
+                toastTimeoutRef.current = null;
+              }
+              setToastMsg(null);
+            }}
+            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer ml-2"
+            title="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -945,35 +1389,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )}
       </div>
 
-      {/* Select Match Bar (Hidden for News Reporter) */}
-      {!isNewsReporter && (
-        <div className="bg-slate-900/90 rounded-2xl p-4 shadow-xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 backdrop-blur-sm">
-          <label className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center gap-2 whitespace-nowrap">
-            <span>Active Match Context:</span>
-          </label>
-          <select
-            value={selectedMatchId}
-            onChange={(e) => handleSelectMatch(e.target.value)}
-            className="w-full sm:w-auto flex-1 bg-slate-950 border border-slate-800 font-bold text-slate-100 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-[#800020]"
-          >
-            {matches.map(m => (
-              <option key={m.id} value={m.id}>
-                [{m.status}] Matchday {m.matchday}: {m.homeTeam?.name} vs {m.awayTeam?.name} ({m.homeScore}-{m.awayScore})
-              </option>
-            ))}
-          </select>
+      {/* Contextual Sub-Panel Dropdown & Match Selector (if Panel 1 / Match Control) */}
+      {isOfficialLeague && !isSuperAdmin ? (
+        <div className="bg-[#800020]/90 border border-amber-500/50 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-100 shadow-xl backdrop-blur-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black shrink-0 shadow-lg">
+              <Megaphone className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-black text-sm text-amber-300 flex items-center gap-1.5">
+                <span>Official League Desk</span>
+                <VerifiedBadge role="official_league" />
+              </h4>
+              <p className="text-xs text-rose-200/90 font-medium">You have exclusive media publishing rights to post News, Match Videos, EPL Highlights, and Player of the Month awards.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5 w-full sm:w-auto">
+            <select
+              value={adminTab}
+              onChange={(e) => setAdminTab(e.target.value as any)}
+              className="bg-slate-950 border border-amber-500/60 font-black text-amber-300 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-amber-400 cursor-pointer flex-1 sm:min-w-[200px]"
+            >
+              <option value="news">News & Gazette</option>
+              <option value="videos">Match Videos Hub</option>
+              <option value="highlights">EPL Highlights Poster</option>
+              <option value="potm">Player of the Month (POTM)</option>
+            </select>
+            <span className="bg-amber-400 text-slate-950 text-xs font-black px-3 py-2 rounded-xl shrink-0">
+              FA Official
+            </span>
+          </div>
         </div>
-      )}
-
-      {/* Navigation Tabs */}
-      {isNewsReporter ? (
+      ) : isNewsReporter ? (
         <div className="bg-purple-950/80 border border-purple-800/80 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-purple-100 shadow-xl">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center font-black shrink-0">
               <Newspaper className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="font-black text-sm text-purple-200">Press Officer & News Reporter Desk</h4>
+              <h4 className="font-black text-sm text-purple-200 flex items-center gap-1.5">
+                <span>Press Officer & News Reporter Desk</span>
+                <VerifiedBadge role="news_reporter" />
+              </h4>
               <p className="text-xs text-purple-300/80">You have dedicated access to draft, edit, and submit news dispatches. Submitted articles require Super Admin verification before going live.</p>
             </div>
           </div>
@@ -981,129 +1438,108 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             Reporter Mode
           </span>
         </div>
-      ) : (
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
-          <button
-            onClick={() => setAdminTab('controller')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'controller'
-                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <Play className="w-4 h-4 text-amber-400" />
-            <span>Match Clock & Stats</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('events')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'events'
-                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <PlusCircle className="w-4 h-4 text-amber-400" />
-            <span>Goal & Event Logger</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('fixtures')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'fixtures'
-                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md ring-2 ring-amber-400/20'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <Calendar className="w-4 h-4 text-amber-400" />
-            <span>Upload Fixtures & Schedule</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('transfers')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'transfers'
-                ? 'bg-emerald-600 text-white font-black shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <ArrowRightLeft className="w-4 h-4 text-amber-400" />
-            <span>Inter-Team Transfers</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('players')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'players'
-                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <User className="w-4 h-4 text-amber-400" />
-            <span>Player Profiles & Pictures</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('teams')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'teams'
-                ? 'bg-amber-400 text-slate-950 font-black shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <Building2 className="w-4 h-4 text-amber-400" />
-            <span>Team Roster Management {isSuperAdmin && '👑'}</span>
-          </button>
-
-          {isSuperAdmin && (
-            <button
-              onClick={() => setAdminTab('standings')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-                adminTab === 'standings'
-                  ? 'bg-amber-400 text-slate-950 font-black shadow-lg ring-2 ring-amber-300/30'
-                  : 'bg-slate-900 text-amber-300 hover:bg-slate-800 border border-amber-400/30'
-              }`}
+      ) : isSubAdmin && !isSuperAdmin ? (
+        <div className="bg-slate-900/90 border border-amber-500/50 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-100 shadow-xl backdrop-blur-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-400 text-slate-950 flex items-center justify-center font-black shrink-0 shadow-lg">
+              <Play className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-black text-sm text-amber-300 flex items-center gap-1.5">
+                <span>Sub-Admin Match Operations Desk</span>
+                <VerifiedBadge role="sub_admin" />
+              </h4>
+              <p className="text-xs text-amber-200/90 font-medium">Designated access to Match Clock, Lineups, Event Logger, and Live Ratings.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5 w-full sm:w-auto">
+            <select
+              value={adminTab}
+              onChange={(e) => setAdminTab(e.target.value as any)}
+              className="bg-slate-950 border border-amber-500/60 font-black text-amber-300 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-amber-400 cursor-pointer flex-1 sm:min-w-[200px]"
             >
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span>League Standings Override 👑</span>
-            </button>
+              <option value="controller">Match Clock & Stats</option>
+              <option value="lineups">Lineups</option>
+              <option value="events">Goal & Event Logger</option>
+              <option value="ratings">Live Player Ratings & MOTM</option>
+            </select>
+            <span className="bg-amber-400 text-slate-950 text-xs font-black px-3 py-2 rounded-xl shrink-0">
+              Sub-Admin
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-900/90 rounded-2xl p-4 shadow-xl border border-slate-800 backdrop-blur-sm">
+          <div className="flex items-center gap-2.5 w-full sm:w-auto">
+            <Sliders className="w-5 h-5 text-amber-400 shrink-0" />
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black text-amber-400 uppercase tracking-wider">Active Section</span>
+              <select
+                value={adminTab}
+                onChange={(e) => setAdminTab(e.target.value as any)}
+                className="bg-slate-950 border border-slate-800 font-bold text-slate-100 rounded-xl px-3 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-[#800020] min-w-[220px]"
+              >
+                {activePanel === 1 && (
+                  <>
+                    <option value="fixtures">Fixtures & Scheduler</option>
+                    <option value="controller">Match Clock & Stats</option>
+                    <option value="lineups">Lineups</option>
+                    <option value="events">Goal & Event Logger</option>
+                    <option value="ratings">Live Player Ratings & MOTM</option>
+                  </>
+                )}
+                {activePanel === 2 && (
+                  <>
+                    {isSuperAdmin && <option value="standings">Standings Override</option>}
+                    <option value="teams">Team Manager</option>
+                    <option value="squads">Squad Manager</option>
+                    <option value="transfers">Transfer Engine</option>
+                    <option value="bulk_teams">Bulk Team Upload</option>
+                  </>
+                )}
+                {activePanel === 3 && (
+                  <>
+                    <option value="players">Player Roster</option>
+                    {(isSuperAdmin || isOfficialLeague) && <option value="potm">Player of the Month (POTM)</option>}
+                    <option value="bulk_upload">Bulk Upload Player Roster</option>
+                  </>
+                )}
+                {activePanel === 4 && (
+                  <>
+                    <option value="valuations">Player Valuations</option>
+                    <option value="availability">Player Availability</option>
+                  </>
+                )}
+                {activePanel === 5 && (
+                  <>
+                    <option value="news">News & Gazette</option>
+                    {(isSuperAdmin || isOfficialLeague) && <option value="highlights">EPL Highlights Poster</option>}
+                    {(isSuperAdmin || isOfficialLeague) && <option value="videos">Match Videos Hub</option>}
+                    {isSuperAdmin && <option value="ads">Ad Placement</option>}
+                    {isSuperAdmin && <option value="branding">App Branding & About</option>}
+                    {isSuperAdmin && <option value="admins">Admin Management</option>}
+                  </>
+                )}
+              </select>
+            </div>
+          </div>
+
+          {activePanel === 1 && (
+            <div className="flex items-center gap-2 w-full sm:w-auto flex-1 justify-end">
+              <span className="text-[10px] font-black text-amber-400 uppercase tracking-wider whitespace-nowrap">Match Context:</span>
+              <select
+                value={selectedMatchId}
+                onChange={(e) => handleSelectMatch(e.target.value)}
+                className="bg-slate-950 border border-slate-800 font-bold text-slate-100 rounded-xl px-3 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-[#800020] flex-1 sm:max-w-xs"
+              >
+                {matches.map(m => (
+                  <option key={m.id} value={m.id}>
+                    [{m.status}] M{m.matchday}: {m.homeTeam?.name} vs {m.awayTeam?.name} ({m.homeScore}-{m.awayScore})
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
-
-          <button
-            onClick={() => setAdminTab('branding')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'branding'
-                ? 'bg-amber-400 text-slate-950 font-black shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <Palette className="w-4 h-4 text-amber-400" />
-            <span>App Icon & Branding {isSuperAdmin && '👑'}</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('news')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'news'
-                ? 'bg-[#800020] text-amber-300 border border-rose-800 shadow-md'
-                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
-            }`}
-          >
-            <Newspaper className="w-4 h-4 text-amber-400" />
-            <span>News Publisher</span>
-          </button>
-
-          <button
-            onClick={() => setAdminTab('admins')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-extrabold whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
-              adminTab === 'admins'
-                ? 'bg-amber-400 text-slate-950 font-black shadow-lg ring-2 ring-amber-300/30'
-                : 'bg-slate-900 text-amber-300 hover:bg-slate-800 border border-amber-400/30'
-            }`}
-          >
-            <Crown className="w-4 h-4 text-amber-400" />
-            <span>Admin Roster</span>
-          </button>
         </div>
       )}
 
@@ -1120,107 +1556,181 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           {/* Current Score & Real-Time Ticker Display */}
-          <div className="bg-slate-950 text-white rounded-2xl p-6 text-center space-y-4 border border-slate-800 relative">
+          <div className="bg-slate-950 text-white rounded-2xl p-6 text-center space-y-4 border border-slate-800 relative shadow-xl">
             <div className="flex items-center justify-between text-xs text-amber-400 font-bold uppercase tracking-widest">
-              <span>Current Match State: {selectedMatch.period}</span>
-              <button
-                type="button"
-                onClick={() => setIsTimerRunning(!isTimerRunning)}
-                className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 cursor-pointer border transition-all ${
-                  isTimerRunning
-                    ? 'bg-emerald-950 text-emerald-300 border-emerald-700 animate-pulse'
-                    : 'bg-rose-950 text-rose-300 border-rose-800'
-                }`}
-              >
-                {isTimerRunning ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                <span>{isTimerRunning ? 'MATCH TICKER RUNNING' : 'PAUSED'}</span>
-              </button>
+              <span>State: {selectedMatch.period} ({selectedMatch.status})</span>
+              <span className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 border ${liveClock.badgeColor}`}>
+                <span className="w-2 h-2 rounded-full bg-red-400 animate-ping"></span>
+                <span>{liveClock.displayString} {liveClock.overflowText ? `(${liveClock.overflowText})` : ''}</span>
+              </span>
             </div>
 
             <div className="text-3xl sm:text-5xl font-mono font-black text-white">
               {selectedMatch.homeTeam?.name} <span className="text-amber-300">{selectedMatch.homeScore} - {selectedMatch.awayScore}</span> {selectedMatch.awayTeam?.name}
             </div>
 
-            <div className="text-sm font-extrabold text-slate-300 font-mono">
-              Display Time: {clockMinute >= 90 ? `90+${clockMinute - 90}'` : clockMinute >= 45 && selectedMatch.period === '1st Half' ? `45+${clockMinute - 45}'` : `${clockMinute}'`}
+            {/* RAPID-FIRE QUICK GOAL BUTTONS */}
+            <div className="pt-2">
+              <div className="bg-slate-900 border border-emerald-500/40 rounded-xl p-3 shadow-inner space-y-2 max-w-2xl mx-auto">
+                <div className="flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>⚡ Quick Goal Instant Trigger</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">Push live score immediately to fans</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleQuickGoal('home')}
+                    className="py-2.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg cursor-pointer border border-emerald-400/50 transition-all"
+                  >
+                    <span className="text-base sm:text-lg">⚽</span>
+                    <span>+1 {selectedMatch.homeTeam?.shortName || 'HOME'} Goal</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleQuickGoal('away')}
+                    className="py-2.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg cursor-pointer border border-emerald-400/50 transition-all"
+                  >
+                    <span className="text-base sm:text-lg">⚽</span>
+                    <span>+1 {selectedMatch.awayTeam?.shortName || 'AWAY'} Goal</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-xs font-mono font-semibold text-slate-300 flex items-center justify-center gap-3">
+              <span>Local Ticking Clock: <strong className="text-amber-300 font-bold">{liveClock.displayString}</strong></span>
+              {liveClock.overflowText && (
+                <span className="bg-rose-950 text-rose-300 border border-rose-800 px-2 py-0.5 rounded text-[11px] font-bold">
+                  Extra Time Overflow: {liveClock.overflowText}
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Quick Match Phase Jumps */}
+          {/* 40-MINUTE HALVES MATCH STATE CONTROLS */}
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-              Quick Match Phase Jump (45-min Standard + Stoppage):
+            <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+              <span>Match State Controls (40-Min Halves + Referee Stoppage):</span>
+              <span className="text-[10px] text-amber-400 font-mono">Timestamp Clock • Zero DB Ticker Reads</span>
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <button
-                onClick={() => {
-                  setClockMinute(0);
-                  handleUpdateStatus('1st Half');
-                }}
-                className="bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 font-bold p-2.5 rounded-xl text-xs cursor-pointer"
+                type="button"
+                onClick={handleStart1stHalf}
+                className={`p-3.5 rounded-xl text-xs font-extrabold flex flex-col items-center justify-center gap-1 border transition-all cursor-pointer ${
+                  selectedMatch.period === '1st Half'
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500 ring-2 ring-emerald-500/30 shadow-lg'
+                    : 'bg-slate-950 hover:bg-slate-800 text-slate-100 border-slate-800'
+                }`}
               >
-                ⏱️ Kickoff (0')
+                <span className="text-base">⏱️</span>
+                <span>Start 1st Half</span>
+                <span className="text-[10px] text-slate-400 font-normal">Kickoff (00:00 - 40:00)</span>
               </button>
 
               <button
-                onClick={() => {
-                  setClockMinute(45);
-                  handleUpdateStatus('1st Half');
-                }}
-                className="bg-slate-950 hover:bg-slate-800 text-amber-300 border border-slate-800 font-bold p-2.5 rounded-xl text-xs cursor-pointer"
+                type="button"
+                onClick={handleEnd1stHalf}
+                className={`p-3.5 rounded-xl text-xs font-extrabold flex flex-col items-center justify-center gap-1 border transition-all cursor-pointer ${
+                  selectedMatch.period === 'Half-Time'
+                    ? 'bg-amber-950 text-amber-300 border-amber-500 ring-2 ring-amber-500/30 shadow-lg'
+                    : 'bg-slate-950 hover:bg-slate-800 text-slate-100 border-slate-800'
+                }`}
               >
-                ⌛ 45' (+{stoppage1st}m ET)
+                <span className="text-base">⏸️</span>
+                <span>End 1st Half</span>
+                <span className="text-[10px] text-slate-400 font-normal">Half-Time (HT)</span>
               </button>
 
               <button
-                onClick={() => {
-                  setClockMinute(45 + stoppage1st);
-                  handleUpdateStatus('Half-Time');
-                  setIsTimerRunning(false);
-                }}
-                className="bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 font-bold p-2.5 rounded-xl text-xs cursor-pointer"
+                type="button"
+                onClick={handleStart2ndHalf}
+                className={`p-3.5 rounded-xl text-xs font-extrabold flex flex-col items-center justify-center gap-1 border transition-all cursor-pointer ${
+                  selectedMatch.period === '2nd Half'
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-500 ring-2 ring-emerald-500/30 shadow-lg'
+                    : 'bg-slate-950 hover:bg-slate-800 text-slate-100 border-slate-800'
+                }`}
               >
-                ⏸️ Half-Time (HT)
+                <span className="text-base">⏱️</span>
+                <span>Start 2nd Half</span>
+                <span className="text-[10px] text-slate-400 font-normal">Resume (40:00 - 80:00)</span>
               </button>
 
               <button
-                onClick={() => {
-                  setClockMinute(46);
-                  handleUpdateStatus('2nd Half');
-                }}
-                className="bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 font-bold p-2.5 rounded-xl text-xs cursor-pointer"
+                type="button"
+                onClick={handleEndMatch}
+                className={`p-3.5 rounded-xl text-xs font-extrabold flex flex-col items-center justify-center gap-1 border transition-all cursor-pointer ${
+                  selectedMatch.period === 'Full-Time'
+                    ? 'bg-rose-950 text-rose-300 border-rose-500 ring-2 ring-rose-500/30 shadow-lg'
+                    : 'bg-slate-950 hover:bg-slate-800 text-slate-100 border-slate-800'
+                }`}
               >
-                ⏱️ 2nd Half (46')
-              </button>
-
-              <button
-                onClick={() => {
-                  setClockMinute(90);
-                  handleUpdateStatus('2nd Half');
-                }}
-                className="bg-slate-950 hover:bg-slate-800 text-amber-300 border border-slate-800 font-bold p-2.5 rounded-xl text-xs cursor-pointer"
-              >
-                ⌛ 90' (+{stoppage2nd}m ET)
-              </button>
-
-              <button
-                onClick={() => {
-                  setClockMinute(90 + stoppage2nd);
-                  handleUpdateStatus('Full-Time');
-                  setIsTimerRunning(false);
-                }}
-                className="bg-red-950 hover:bg-red-900 text-red-200 border border-red-800 font-bold p-2.5 rounded-xl text-xs cursor-pointer"
-              >
-                🏁 Full-Time (FT)
+                <span className="text-base">🏁</span>
+                <span>End Match</span>
+                <span className="text-[10px] text-slate-400 font-normal">Full-Time (FT 80')</span>
               </button>
             </div>
           </div>
 
-          {/* Stoppage Time Setter Controls */}
+          {/* CUP TIE-BREAKER: PENALTY SHOOTOUT CONTROLLER */}
+          <div className="bg-slate-950 p-5 rounded-2xl border border-amber-500/30 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <label className="text-xs font-black uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                <span>🏆 Cup Tie-Breaker: Penalty Shootout (PK Controller)</span>
+              </label>
+              <span className="text-[10px] font-mono text-slate-400">
+                Type: {selectedMatch?.competition_type || 'League'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  {selectedMatch?.homeTeam?.name || 'Home Team'} Penalties Scored
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={homePenalties}
+                  onChange={(e) => setHomePenalties(Number(e.target.value))}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm font-black text-amber-300 w-full"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  {selectedMatch?.awayTeam?.name || 'Away Team'} Penalties Scored
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={awayPenalties}
+                  onChange={(e) => setAwayPenalties(Number(e.target.value))}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-sm font-black text-amber-300 w-full"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={handleSavePenalties}
+                className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-5 py-2 rounded-xl text-xs uppercase tracking-wider shadow-lg cursor-pointer"
+              >
+                Save Penalty Shootout Score & Mark Penalties
+              </button>
+            </div>
+          </div>
+
+          {/* Stoppage / Extra Time Setter Controls */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-2xl border border-slate-800">
-            <div>
-              <label className="text-xs font-bold text-amber-300 uppercase block mb-1">
-                1st Half Stoppage Time (+mins)
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-amber-300 uppercase block">
+                1st Half Extra / Stoppage Time (+mins)
               </label>
               <div className="flex items-center gap-2">
                 <input
@@ -1229,15 +1739,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   max="15"
                   value={stoppage1st}
                   onChange={(e) => setStoppage1st(Number(e.target.value))}
-                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100 w-24"
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-black text-amber-300 w-20 text-center"
                 />
-                <span className="text-xs text-slate-400">minutes added</span>
+                <button
+                  type="button"
+                  onClick={handleSet1stHalfExtraTime}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-4 py-2 rounded-xl text-xs uppercase cursor-pointer"
+                >
+                  Set 1st Half Extra Time (+{stoppage1st}')
+                </button>
               </div>
+              <p className="text-[10px] text-slate-400">Updates 1st half extra time badge when referee announces stoppage.</p>
             </div>
 
-            <div>
-              <label className="text-xs font-bold text-amber-300 uppercase block mb-1">
-                2nd Half Stoppage Time (+mins)
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-amber-300 uppercase block">
+                2nd Half Extra / Stoppage Time (+mins)
               </label>
               <div className="flex items-center gap-2">
                 <input
@@ -1246,10 +1763,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   max="20"
                   value={stoppage2nd}
                   onChange={(e) => setStoppage2nd(Number(e.target.value))}
-                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100 w-24"
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-black text-amber-300 w-20 text-center"
                 />
-                <span className="text-xs text-slate-400">minutes added</span>
+                <button
+                  type="button"
+                  onClick={handleSet2ndHalfExtraTime}
+                  className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-4 py-2 rounded-xl text-xs uppercase cursor-pointer"
+                >
+                  Set 2nd Half Extra Time (+{stoppage2nd}')
+                </button>
               </div>
+              <p className="text-[10px] text-slate-400">Updates 2nd half extra time badge when referee announces stoppage.</p>
             </div>
           </div>
 
@@ -1461,11 +1985,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
               </div>
+              {/* MOTM & FANTASY BONUS */}
+              <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-4">
+                <div className="text-xs font-bold text-amber-300 uppercase flex items-center gap-2 border-b border-slate-800 pb-2">
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                  Match Awards & Fantasy Bonus Points
+                </div>
+                {selectedMatch.status === 'Full-Time' ? (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-slate-400 font-bold block">Man of the Match</label>
+                      <select
+                        value={motmPlayerId}
+                        onChange={(e) => setMotmPlayerId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-bold text-slate-100"
+                      >
+                        <option value="">-- Select MOTM --</option>
+                        {players.filter(p => p.teamId === selectedMatch.homeTeamId || p.teamId === selectedMatch.awayTeamId).map(p => (
+                          <option key={p.id} value={p.id}>{p.name} ({p.teamId === selectedMatch.homeTeamId ? selectedMatch.homeTeam?.shortName : selectedMatch.awayTeam?.shortName})</option>
+                        ))}
+                      </select>
+                    </div>
+                    {motmPlayerId && (
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-slate-400 font-bold block">MOTM Graphic (JPEG, Max 2MB)</label>
+                        <MediaUploader
+                          accept="image/jpeg, image/jpg"
+                          onUploadComplete={setMotmGraphicUrl}
+                          label="Upload MOTM Image"
+                        />
+                        {motmGraphicUrl && (
+                          <div className="mt-2 border rounded-lg border-slate-800 overflow-hidden bg-slate-950 p-2">
+                            <img src={motmGraphicUrl} alt="Preview" className="w-full h-auto object-cover rounded" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="pt-2 space-y-3 border-t border-slate-800">
+                      <label className="text-[10px] text-slate-400 font-bold block uppercase text-emerald-400">Fantasy Bonus Allocation</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[10px] text-slate-400 font-bold block mb-1">1st Place (3 pts)</label>
+                          <select
+                            value={bonusFirstPlace}
+                            onChange={(e) => setBonusFirstPlace(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-100"
+                          >
+                            <option value="">-- Select --</option>
+                            {players.filter(p => p.teamId === selectedMatch.homeTeamId || p.teamId === selectedMatch.awayTeamId).map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-400 font-bold block mb-1">2nd Place (2 pts)</label>
+                          <select
+                            value={bonusSecondPlace}
+                            onChange={(e) => setBonusSecondPlace(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-100"
+                          >
+                            <option value="">-- Select --</option>
+                            {players.filter(p => p.teamId === selectedMatch.homeTeamId || p.teamId === selectedMatch.awayTeamId).map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-400 font-bold block mb-1">3rd Place (1 pt)</label>
+                          <select
+                            value={bonusThirdPlace}
+                            onChange={(e) => setBonusThirdPlace(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-100"
+                          >
+                            <option value="">-- Select --</option>
+                            {players.filter(p => p.teamId === selectedMatch.homeTeamId || p.teamId === selectedMatch.awayTeamId).map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs font-bold text-slate-500 italic p-2 text-center bg-slate-950 rounded-lg border border-slate-800 border-dashed">
+                    Match must be 'Full-Time' to allocate awards and bonus points.
+                  </div>
+                )}
+              </div>
             </div>
-
             <button
+              type="button"
               onClick={handleSaveMatchStats}
-              className="w-full bg-gradient-to-r from-[#800020] via-rose-900 to-amber-700 text-amber-300 font-black py-3 rounded-xl text-xs uppercase tracking-wider shadow-lg flex items-center justify-center gap-2 cursor-pointer border border-amber-400/30"
+              className="w-full bg-gradient-to-r from-[#800020] via-rose-900 to-amber-700 text-amber-300 font-black py-3.5 rounded-xl text-xs uppercase tracking-wider shadow-lg flex items-center justify-center gap-2 cursor-pointer border border-amber-400/40 hover:brightness-110 active:scale-[0.99] transition-all"
             >
               <Save className="w-4 h-4" />
               <span>Save Game Statistics to Match Data</span>
@@ -1497,10 +2108,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* RAPID QUICK GOAL TRIGGER BAR */}
+          <div className="bg-slate-950 border border-emerald-500/30 rounded-2xl p-4 shadow-xl space-y-2">
+            <div className="flex items-center justify-between text-xs font-black uppercase text-emerald-400 tracking-wider">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>⚡ Instant Quick Goal Action</span>
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">Instant Score Update + Follow-up Details</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => handleQuickGoal('home')}
+                className="py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
+              >
+                <span className="text-xl">⚽</span>
+                <span>+1 {selectedMatch.homeTeam?.shortName || 'HOME'} Goal</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickGoal('away')}
+                className="py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-500 hover:to-teal-600 text-white font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg hover:scale-[1.02] active:scale-95 transition-all cursor-pointer border border-emerald-400/40"
+              >
+                <span className="text-xl">⚽</span>
+                <span>+1 {selectedMatch.awayTeam?.shortName || 'AWAY'} Goal</span>
+              </button>
+            </div>
+          </div>
+
           {/* Quick Preset Buttons */}
-          <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
             <button
-              onClick={() => handleOpenEventModal('Goal')}
+              onClick={() => handleOpenEventModal('Goal', 'standard')}
               className="p-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex flex-col items-center gap-1.5 shadow-lg hover:scale-105 transition-all cursor-pointer border border-emerald-400/30"
             >
               <span className="text-2xl">⚽</span>
@@ -1508,7 +2148,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button
-              onClick={() => handleOpenEventModal('Penalty Goal')}
+              onClick={() => handleOpenEventModal('Goal', 'penalty')}
               className="p-3.5 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs flex flex-col items-center gap-1.5 shadow-lg hover:scale-105 transition-all cursor-pointer border border-teal-400/30"
             >
               <span className="text-2xl">🎯</span>
@@ -1516,11 +2156,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button
-              onClick={() => handleOpenEventModal('Own Goal')}
+              onClick={() => handleOpenEventModal('Goal', 'own_goal')}
               className="p-3.5 rounded-2xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs flex flex-col items-center gap-1.5 shadow-lg hover:scale-105 transition-all cursor-pointer border border-purple-400/30"
             >
-              <span className="text-2xl">⚠️</span>
+              <span className="text-2xl">🔴⚽</span>
               <span>OWN GOAL</span>
+            </button>
+
+            <button
+              onClick={() => handleOpenEventModal('penalty_miss')}
+              className="p-3.5 rounded-2xl bg-rose-700 hover:bg-rose-600 text-white font-black text-xs flex flex-col items-center gap-1.5 shadow-lg hover:scale-105 transition-all cursor-pointer border border-rose-400/30"
+            >
+              <span className="text-2xl">❌🥅</span>
+              <span>PEN. MISS</span>
             </button>
 
             <button
@@ -1528,7 +2176,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               className="p-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs flex flex-col items-center gap-1.5 shadow-lg hover:scale-105 transition-all cursor-pointer border border-amber-500/30"
             >
               <span className="text-2xl">🟨</span>
-              <span>YELLOW CARD</span>
+              <span>YELLOW</span>
             </button>
 
             <button
@@ -1762,6 +2410,136 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               ))
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MODULE: LIVE PLAYER RATINGS (1.0 - 10.0) */}
+      {adminTab === 'ratings' && selectedMatch && (
+        <div className="bg-slate-900/90 rounded-3xl p-6 shadow-xl border border-slate-800 space-y-6 text-slate-100">
+          <div className="border-b border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-black text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-400" />
+                <span>Real-Time Live Player Performance Ratings</span>
+                <span className="bg-[#800020] text-amber-300 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                  Matchday {selectedMatch.matchday}
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                Assign performance ratings (1.0 - 10.0) for match players. Color codes: Red (&lt;5.0), Orange (5.0-6.9), Green (7.0-8.4), Blue (8.5+).
+              </p>
+            </div>
+
+            <button
+              onClick={async () => {
+                try {
+                  await api.saveRatings(selectedMatch.id, ratingsState);
+                  showToast('Player ratings saved & updated across public views!');
+                  onRefreshAll();
+                } catch (e: any) {
+                  showToast(`Error saving ratings: ${e.message}`);
+                }
+              }}
+              className="bg-amber-400 hover:bg-amber-300 text-slate-950 font-black px-5 py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-lg flex items-center gap-2 cursor-pointer shrink-0"
+            >
+              <Save className="w-4 h-4" />
+              <span>Save Player Ratings</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* HOME TEAM PLAYERS */}
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <h4 className="font-extrabold text-sm text-amber-300 flex items-center gap-2">
+                  <img src={selectedMatch.homeTeam?.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover" />
+                  <span>{selectedMatch.homeTeam?.name || 'Home Team'} Roster</span>
+                </h4>
+                <span className="text-xs text-slate-400 font-mono">Home Squad</span>
+              </div>
+
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1 no-scrollbar">
+                {players
+                  .filter(p => p.teamId === selectedMatch.homeTeamId)
+                  .map(p => {
+                    const currentVal = ratingsState[p.id] ?? 6.5;
+                    return (
+                      <div key={p.id} className="flex items-center justify-between bg-slate-900 p-3 rounded-xl border border-slate-800">
+                        <div className="flex items-center gap-2.5">
+                          <img src={p.photoUrl} alt="" className="w-8 h-8 rounded-full object-cover border border-slate-700" />
+                          <div>
+                            <div className="text-xs font-bold text-slate-100">{p.name}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">#{p.shirtNumber} • {p.position}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <RatingBadge rating={currentVal} size="sm" showLabel={false} />
+                          <input
+                            type="number"
+                            min="1.0"
+                            max="10.0"
+                            step="0.1"
+                            value={currentVal}
+                            onChange={(e) => {
+                              const v = Math.min(10, Math.max(1, Number(e.target.value)));
+                              setRatingsState(prev => ({ ...prev, [p.id]: v }));
+                            }}
+                            className="w-16 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono font-bold text-amber-300 text-center"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
+            {/* AWAY TEAM PLAYERS */}
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                <h4 className="font-extrabold text-sm text-amber-300 flex items-center gap-2">
+                  <img src={selectedMatch.awayTeam?.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover" />
+                  <span>{selectedMatch.awayTeam?.name || 'Away Team'} Roster</span>
+                </h4>
+                <span className="text-xs text-slate-400 font-mono">Away Squad</span>
+              </div>
+
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1 no-scrollbar">
+                {players
+                  .filter(p => p.teamId === selectedMatch.awayTeamId)
+                  .map(p => {
+                    const currentVal = ratingsState[p.id] ?? 6.5;
+                    return (
+                      <div key={p.id} className="flex items-center justify-between bg-slate-900 p-3 rounded-xl border border-slate-800">
+                        <div className="flex items-center gap-2.5">
+                          <img src={p.photoUrl} alt="" className="w-8 h-8 rounded-full object-cover border border-slate-700" />
+                          <div>
+                            <div className="text-xs font-bold text-slate-100">{p.name}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">#{p.shirtNumber} • {p.position}</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <RatingBadge rating={currentVal} size="sm" showLabel={false} />
+                          <input
+                            type="number"
+                            min="1.0"
+                            max="10.0"
+                            step="0.1"
+                            value={currentVal}
+                            onChange={(e) => {
+                              const v = Math.min(10, Math.max(1, Number(e.target.value)));
+                              setRatingsState(prev => ({ ...prev, [p.id]: v }));
+                            }}
+                            className="w-16 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono font-bold text-amber-300 text-center"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2068,6 +2846,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {adminTab === 'potm' && (isSuperAdmin || isOfficialLeague) && (
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+              <Trophy className="w-6 h-6 text-amber-400" />
+              Player of the Month (POTM)
+            </h2>
+            <p className="text-sm text-slate-400 mt-1">Upload and manage the Player of the Month award graphics.</p>
+          </div>
+          <PotmManager players={players} teams={teams} />
+        </div>
+      )}
+
       {/* MODULE 5: SUPER ADMIN TEAM MANAGEMENT */}
       {adminTab === 'teams' && (
         <div className="bg-slate-900/90 rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-800 space-y-6 text-slate-100">
@@ -2102,6 +2893,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setTeamFormShort('');
                         setTeamFormLogo('');
                         setTeamFormCoach('');
+                        setTeamFormCoachPhotoUrl('');
                         setTeamFormStadium('');
                       }}
                       className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-2.5 py-1 rounded-lg text-xs cursor-pointer"
@@ -2141,6 +2933,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       placeholder="e.g. Samson Samson"
                       value={teamFormCoach}
                       onChange={(e) => setTeamFormCoach(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Coach Profile Picture URL</label>
+                    <input
+                      type="url"
+                      placeholder="e.g. https://example.com/coach.jpg"
+                      value={teamFormCoachPhotoUrl}
+                      onChange={(e) => setTeamFormCoachPhotoUrl(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100"
                     />
                   </div>
@@ -2191,6 +2993,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setTeamFormShort('');
                         setTeamFormLogo('');
                         setTeamFormCoach('');
+                        setTeamFormCoachPhotoUrl('');
                         setTeamFormStadium('');
                       }}
                       className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-4 py-3 rounded-xl text-xs cursor-pointer"
@@ -2236,6 +3039,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           setTeamFormShort(t.shortName);
                           setTeamFormLogo(t.logoUrl);
                           setTeamFormCoach(t.coach);
+                          setTeamFormCoachPhotoUrl(t.coachPhotoUrl || '');
                           setTeamFormStadium(t.stadium);
                         }}
                         className="bg-slate-900 hover:bg-slate-800 text-amber-300 p-2 rounded-xl border border-slate-800 cursor-pointer"
@@ -2280,6 +3084,397 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {/* MODULE: SQUAD MANAGER (SQUADS & PLAYERS MANAGEMENT) */}
+      {adminTab === 'squads' && (
+        <div className="bg-slate-900/90 rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-800 space-y-6 text-slate-100">
+          <div className="border-b border-slate-800 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-xl font-black text-slate-100 flex items-center gap-2">
+                <Users className="w-6 h-6 text-amber-400" />
+                Team Squad Manager & Roster Control
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Inspect players in every team, edit player details, update squad photos, transfer or remove players from team rosters.
+              </p>
+            </div>
+
+            {/* Team Roster Filter */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={playerRosterTeamFilter}
+                onChange={(e) => setPlayerRosterTeamFilter(e.target.value)}
+                className="bg-slate-950 border border-slate-800 font-extrabold text-amber-300 text-xs rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-amber-400 cursor-pointer"
+              >
+                <option value="all">All Teams ({players.length} Players)</option>
+                {teams.map(t => {
+                  const count = players.filter(p => p.teamId === t.id).length;
+                  return (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({count} Players)
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          </div>
+
+          {/* Quick Team Info Header if team selected */}
+          {playerRosterTeamFilter !== 'all' && (() => {
+            const currentTeam = teams.find(t => t.id === playerRosterTeamFilter);
+            if (!currentTeam) return null;
+            const teamPlayers = players.filter(p => p.teamId === currentTeam.id);
+            const gkCount = teamPlayers.filter(p => p.position === 'GK').length;
+            const defCount = teamPlayers.filter(p => p.position === 'DEF').length;
+            const midCount = teamPlayers.filter(p => p.position === 'MID').length;
+            const fwdCount = teamPlayers.filter(p => p.position === 'FWD').length;
+
+            return (
+              <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <img src={currentTeam.logoUrl} alt={currentTeam.name} className="w-14 h-14 rounded-2xl object-contain bg-slate-900 p-1.5 border border-amber-400/40 shadow-lg" />
+                  <div>
+                    <h4 className="font-black text-base text-amber-300 flex items-center gap-2">
+                      <span>{currentTeam.name}</span>
+                      <span className="text-slate-400 font-mono text-xs">({currentTeam.shortName})</span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Head Coach: <strong className="text-slate-200">{currentTeam.coach}</strong> &bull; Stadium: <strong className="text-slate-200">{currentTeam.stadium}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-center">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">Total Players</span>
+                    <span className="text-sm font-black text-amber-300">{teamPlayers.length}</span>
+                  </div>
+                  <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-center">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">GK / DEF / MID / FWD</span>
+                    <span className="text-xs font-extrabold text-slate-200">{gkCount} GK • {defCount} DEF • {midCount} MID • {fwdCount} FWD</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Player Roster Grid & Edit Modal Container */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left Column: Add / Edit Player Form */}
+            <div className="lg:col-span-5 bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h4 className="font-black text-sm uppercase text-amber-300 flex items-center gap-2">
+                  <User className="w-4 h-4 text-amber-400" />
+                  <span>{editingPlayerId ? 'Edit Player Squad Details' : 'Register New Player'}</span>
+                </h4>
+                {editingPlayerId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingPlayerId(null);
+                      setPlayerFormName('');
+                      setPlayerFormShirt(10);
+                      setPlayerFormPos('MID');
+                      setPlayerFormPhoto('');
+                      setPlayerFormBio('');
+                    }}
+                    className="text-[10px] font-bold text-slate-400 hover:text-white bg-slate-800 px-2.5 py-1 rounded-lg cursor-pointer"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleSavePlayerProfile} className="space-y-3.5">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Player Full Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Segun Samson"
+                    value={playerFormName}
+                    onChange={(e) => setPlayerFormName(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Assign Team *</label>
+                    <select
+                      value={playerFormTeamId || (playerRosterTeamFilter !== 'all' ? playerRosterTeamFilter : teams[0]?.id)}
+                      onChange={(e) => setPlayerFormTeamId(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs font-bold text-amber-300 cursor-pointer"
+                    >
+                      {teams.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Position *</label>
+                    <select
+                      value={playerFormPos}
+                      onChange={(e) => setPlayerFormPos(e.target.value as any)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-100 cursor-pointer"
+                    >
+                      <option value="GK">🧤 Goalkeeper (GK)</option>
+                      <option value="DEF">🛡️ Defender (DEF)</option>
+                      <option value="MID">⚙️ Midfielder (MID)</option>
+                      <option value="FWD">⚽ Forward (FWD)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Shirt Number (#)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="99"
+                      value={playerFormShirt}
+                      onChange={(e) => setPlayerFormShirt(Number(e.target.value))}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Nationality</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Nigeria"
+                      value={playerFormNationality}
+                      onChange={(e) => setPlayerFormNationality(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Player Profile Photo</label>
+                  <MediaUploader
+                    currentUrl={playerFormPhoto}
+                    onMediaSelect={(url) => setPlayerFormPhoto(url)}
+                    label="Upload Player Photo"
+                    presetCategory="player_photo"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSavingPlayer}
+                  className="w-full bg-amber-400 hover:bg-amber-300 disabled:opacity-50 text-slate-950 font-black py-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer transition-all shadow-md flex items-center justify-center gap-2"
+                >
+                  {isSavingPlayer ? (
+                    <span>Saving Squad Data...</span>
+                  ) : (
+                    <span>{editingPlayerId ? 'Save Updated Player Info' : 'Add Player to Squad'}</span>
+                  )}
+                </button>
+              </form>
+            </div>
+
+            {/* Right Column: Interactive Squad Players Roster */}
+            <div className="lg:col-span-7 space-y-3 max-h-[750px] overflow-y-auto pr-1 no-scrollbar">
+              {(() => {
+                const filteredPlayers = players.filter(p => playerRosterTeamFilter === 'all' || p.teamId === playerRosterTeamFilter);
+
+                if (filteredPlayers.length === 0) {
+                  return (
+                    <div className="p-8 text-center bg-slate-950 rounded-2xl border border-slate-800 text-slate-400 space-y-2">
+                      <Users className="w-8 h-8 text-slate-600 mx-auto" />
+                      <p className="font-bold text-xs">No players found in this team squad.</p>
+                      <p className="text-[11px] text-slate-500">Use the form on the left to add players to this squad.</p>
+                    </div>
+                  );
+                }
+
+                const allFilteredSelected = filteredPlayers.length > 0 && filteredPlayers.every(p => selectedPlayerIds.includes(p.id));
+
+                return (
+                  <div className="space-y-3">
+                    {/* Bulk Selection & Action Bar */}
+                    <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20 backdrop-blur-md shadow-md">
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-300 hover:text-white select-none">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                const filteredIds = filteredPlayers.map(p => p.id);
+                                setSelectedPlayerIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+                              } else {
+                                const filteredSet = new Set(filteredPlayers.map(p => p.id));
+                                setSelectedPlayerIds(prev => prev.filter(id => !filteredSet.has(id)));
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-rose-500 focus:ring-rose-500 cursor-pointer accent-rose-500"
+                          />
+                          <span>Select All ({filteredPlayers.length})</span>
+                        </label>
+
+                        {selectedPlayerIds.length > 0 && (
+                          <span className="text-xs font-mono font-bold bg-amber-400/10 text-amber-300 px-2.5 py-0.5 rounded-lg border border-amber-400/20">
+                            {selectedPlayerIds.length} Selected
+                          </span>
+                        )}
+                      </div>
+
+                      {selectedPlayerIds.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPlayerIds([])}
+                            className="text-[11px] font-bold text-slate-400 hover:text-white px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 cursor-pointer"
+                          >
+                            Deselect All
+                          </button>
+
+                          {showBulkDeletePlayerConfirm ? (
+                            <div className="flex items-center gap-1.5 bg-rose-950 p-1 rounded-xl border border-rose-800">
+                              <button
+                                type="button"
+                                disabled={isBulkDeletingPlayers}
+                                onClick={handleBulkDeletePlayers}
+                                className="bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-[11px] font-black px-3 py-1 rounded-lg cursor-pointer"
+                              >
+                                {isBulkDeletingPlayers ? 'Deleting...' : `Confirm Delete (${selectedPlayerIds.length})`}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setShowBulkDeletePlayerConfirm(false)}
+                                className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold px-2 py-1 rounded-lg cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setShowBulkDeletePlayerConfirm(true)}
+                              className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold px-3 py-1.5 rounded-xl flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete Selected ({selectedPlayerIds.length})</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Players Roster */}
+                    {filteredPlayers.map(p => {
+                      const pTeam = teams.find(t => t.id === p.teamId);
+                      const isSelected = selectedPlayerIds.includes(p.id);
+
+                      return (
+                        <div 
+                          key={p.id} 
+                          className={`p-4 rounded-2xl bg-slate-950 border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                            isSelected ? 'border-rose-500/80 ring-1 ring-rose-500/40 bg-rose-950/20' :
+                            editingPlayerId === p.id ? 'border-amber-400 ring-1 ring-amber-400/50 bg-slate-900/90' : 'border-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedPlayerIds(prev => [...prev, p.id]);
+                                } else {
+                                  setSelectedPlayerIds(prev => prev.filter(id => id !== p.id));
+                                }
+                              }}
+                              className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-rose-500 focus:ring-rose-500 cursor-pointer accent-rose-500 shrink-0"
+                            />
+                            <img 
+                              src={p.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80'} 
+                              alt={p.name} 
+                              className="w-12 h-12 rounded-xl object-cover border border-slate-700 shrink-0" 
+                            />
+                            <div>
+                              <div className="font-black text-sm text-slate-100 flex items-center gap-2">
+                                <span>{p.name}</span>
+                                <span className="text-amber-400 font-mono text-xs">#{p.shirtNumber}</span>
+                                <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-slate-800 text-amber-300 border border-slate-700">
+                                  {p.position}
+                                </span>
+                              </div>
+                              <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-2">
+                                <span>Club: <strong className="text-slate-300">{pTeam?.shortName || 'Free Agent'}</strong></span>
+                                <span>•</span>
+                                <span>Value: <strong className="text-emerald-400">₦{p.price || 6.0}M</strong></span>
+                                <span>•</span>
+                                <span>Goals: <strong className="text-amber-300">{p.goals || 0}</strong></span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-800">
+                            {/* Edit Player Button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPlayerId(p.id);
+                                setPlayerFormName(p.name);
+                                setPlayerFormTeamId(p.teamId);
+                                setPlayerFormPos(p.position);
+                                setPlayerFormShirt(p.shirtNumber || 10);
+                                setPlayerFormPhoto(p.photoUrl || '');
+                                setPlayerFormHeight(p.height || '180 cm');
+                                setPlayerFormWeight(p.weight || '75 kg');
+                                setPlayerFormNationality(p.nationality || 'Nigeria');
+                                setPlayerFormBio(p.bio || '');
+                              }}
+                              className="bg-slate-900 hover:bg-slate-800 text-amber-300 px-3 py-2 rounded-xl text-xs font-bold border border-slate-800 flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Edit</span>
+                            </button>
+
+                            {/* Delete Player Button */}
+                            {deletingPlayerIdConfirm === p.id ? (
+                              <div className="flex items-center gap-1.5 bg-rose-950 p-1.5 rounded-xl border border-rose-800">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePlayer(p.id, p.name)}
+                                  className="bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-black px-2.5 py-1 rounded-lg cursor-pointer"
+                                >
+                                  Confirm Delete
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingPlayerIdConfirm(null)}
+                                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold px-2.5 py-1 rounded-lg cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingPlayerIdConfirm(p.id)}
+                                className="bg-rose-950 hover:bg-rose-900 text-rose-300 p-2 rounded-xl border border-rose-800 cursor-pointer"
+                                title="Delete Player from Squad"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODULE 6: BRANDING & APP ICON (SUPER ADMIN) */}
       {adminTab === 'branding' && (
         <div className="bg-slate-900/90 rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-800 space-y-6 text-slate-100">
@@ -2287,10 +3482,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <Crown className="w-6 h-6 text-amber-400" />
             <div>
               <h3 className="text-xl font-black text-slate-100">
-                League Branding, App Logo & Theme Controls
+                League Branding & About Page Controls
               </h3>
               <p className="text-xs text-slate-400">
-                Grant Super Admin access to customize the app title, logo icon, primary theme color, and season label.
+                Customize the app title, logo icon, primary theme color, season label, and about page content.
               </p>
             </div>
           </div>
@@ -2361,12 +3556,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
+              <div className="pt-6 border-t border-slate-800">
+                <h4 className="text-lg font-bold text-amber-300 mb-4">About Page Content</h4>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
+                      Our Vision Text
+                    </label>
+                    <textarea
+                      value={visionText}
+                      onChange={(e) => setVisionText(e.target.value)}
+                      rows={5}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500"
+                      placeholder="Enter the vision and overview of the league..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 uppercase mb-3">
+                      Leadership & Governance Roster (3 Slots)
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {[0, 1, 2].map(index => (
+                        <div key={index} className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
+                          <div className="text-amber-400 font-bold text-xs">Slot {index + 1}</div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 uppercase mb-1">Name</label>
+                            <input
+                              type="text"
+                              value={leadership[index]?.name || ''}
+                              onChange={(e) => {
+                                const newLeadership = [...leadership];
+                                newLeadership[index] = { ...newLeadership[index], name: e.target.value };
+                                setLeadership(newLeadership);
+                              }}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 uppercase mb-1">Role</label>
+                            <input
+                              type="text"
+                              value={leadership[index]?.role || ''}
+                              onChange={(e) => {
+                                const newLeadership = [...leadership];
+                                newLeadership[index] = { ...newLeadership[index], role: e.target.value };
+                                setLeadership(newLeadership);
+                              }}
+                              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 uppercase mb-1">Profile Picture</label>
+                            <MediaUploader
+                              currentUrl={leadership[index]?.imageUrl || ''}
+                              onSelectUrl={(url) => {
+                                const newLeadership = [...leadership];
+                                newLeadership[index] = { ...newLeadership[index], imageUrl: url };
+                                setLeadership(newLeadership);
+                              }}
+                              label="Upload Avatar"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <button
                 type="submit"
-                className="w-full bg-amber-400 text-slate-950 font-black py-4 rounded-xl text-xs uppercase tracking-wider shadow-xl flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full bg-amber-400 text-slate-950 font-black py-4 rounded-xl text-xs uppercase tracking-wider shadow-xl flex items-center justify-center gap-2 cursor-pointer mt-6"
               >
                 <Save className="w-5 h-5" />
-                <span>Save League Branding & App Settings</span>
+                <span>Save League Branding & About Content</span>
               </button>
             </form>
           ) : (
@@ -2434,10 +3699,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             e.preventDefault();
             if (!newsTitle || !newsContent) return;
             try {
-              const defaultStatus = isSuperAdmin ? 'published' : 'pending_approval';
-              const defaultPublished = isSuperAdmin ? true : false;
+              const defaultStatus = 'published';
+              const defaultPublished = true;
+              const finalAuthor = isOfficialLeague ? 'EPL Official' : (newsAuthor || currentAdmin?.name || 'Segun Samson');
+              const finalAuthorTitle = isOfficialLeague ? '' : (newsAuthorTitle || 'Senior Football Writer');
 
-              await api.saveNews({
+              const saved = await api.saveNews({
                 ...(editingNewsId ? { id: editingNewsId } : {}),
                 title: newsTitle,
                 subtitle: newsSubtitle,
@@ -2447,21 +3714,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 category: newsCategory,
                 issueLabel: newsIssueLabel || 'EPL Dispatch',
                 readTime: newsReadTime || '3 min read',
-                author: newsAuthor || (currentAdmin?.name || 'Segun Samson'),
-                authorTitle: newsAuthorTitle || 'Senior Football Writer',
+                author: finalAuthor,
+                authorTitle: finalAuthorTitle,
                 authorAvatar: newsAuthorAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
                 isSubstackExclusive: newsIsSubstackExclusive,
                 featured: newsFeatured,
                 status: defaultStatus,
                 isPublished: defaultPublished,
-                authorRole: currentAdmin?.role || 'news_reporter'
+                authorRole: isOfficialLeague ? 'official_league' : (currentAdmin?.role || 'news_reporter'),
+                authorEmail: currentUserEmail
               });
 
-              if (isSuperAdmin) {
-                showToast('Article published live to news feed!');
-              } else {
-                showToast('Article submitted! Sent to Super Admin for verification before going live.');
-              }
+              showToast(editingNewsId ? 'Article updated and published live!' : 'Article published live to news feed!');
 
               setEditingNewsId(null);
               setNewsTitle('');
@@ -2545,12 +3809,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-slate-900/80 rounded-xl border border-slate-800">
               <div>
                 <label className="block text-xs font-bold text-amber-300 uppercase mb-1">Substack Author Name</label>
-                <input
-                  type="text"
-                  value={newsAuthor}
-                  onChange={(e) => setNewsAuthor(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100"
-                />
+                {isOfficialLeague ? (
+                  <div className="w-full bg-slate-950/90 border border-amber-500/50 rounded-xl px-3 py-2 text-xs font-black text-amber-300 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <span>EPL Official</span>
+                      <VerifiedBadge role="official_league" />
+                    </span>
+                    <span className="text-[10px] text-amber-400/80 uppercase font-mono tracking-wide">Locked</span>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={newsAuthor}
+                    onChange={(e) => setNewsAuthor(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100"
+                  />
+                )}
               </div>
 
               <div>
@@ -2643,9 +3917,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <Send className="w-4 h-4" />
               <span>
-                {isSuperAdmin
-                  ? (editingNewsId ? 'Update & Publish Dispatch Live' : 'Publish Substack Dispatch Live')
-                  : (editingNewsId ? 'Update & Submit for Super Admin Approval' : 'Submit Dispatch for Super Admin Verification')}
+                {editingNewsId ? 'Update & Publish Dispatch Live' : 'Publish Substack Dispatch Live'}
               </span>
             </button>
           </form>
@@ -2749,9 +4021,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <h5 className="text-sm font-bold text-slate-100 line-clamp-1">{item.title}</h5>
                           <p className="text-xs text-slate-400 line-clamp-1">{item.summary || item.subtitle}</p>
                           <div className="text-[11px] text-slate-400 flex items-center gap-2 pt-0.5">
-                            <span>Author: <strong className="text-slate-200">{item.author}</strong></span>
+                            <span className="flex items-center gap-1">
+                              Author: <strong className="text-slate-200">{item.author}</strong>
+                              <VerifiedBadge role={item.authorRole || (item.author?.toLowerCase().includes("official") ? 'official_league' : 'news_reporter')} />
+                            </span>
                             <span>&bull;</span>
-                            <span>{new Date(item.date).toLocaleDateString()}</span>
+                            <span>{new Date(item.date).toLocaleDateString('en-GB', { timeZone: 'Africa/Lagos' })}</span>
                           </div>
                         </div>
                       </div>
@@ -2769,8 +4044,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     await api.saveNews({
                                       ...item,
                                       status: 'published',
-                                      isPublished: true
-                                    });
+                                      isPublished: true,
+                                      isSuperAdminAction: true
+                                    } as any);
                                     showToast('Publication verified and published live!');
                                     onRefreshAll();
                                   } catch (err: any) {
@@ -2790,8 +4066,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     await api.saveNews({
                                       ...item,
                                       status: 'pending_approval',
-                                      isPublished: false
-                                    });
+                                      isPublished: false,
+                                      isSuperAdminAction: true
+                                    } as any);
                                     showToast('Publication un-published back to pending.');
                                     onRefreshAll();
                                   } catch (err: any) {
@@ -2807,6 +4084,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         )}
 
                         {/* EDIT BUTTON */}
+                        {(isSuperAdmin || isOfficialLeague || item.authorEmail === currentUserEmail || (currentAdmin?.role === 'news_reporter' && item.authorEmail === currentUserEmail)) && (
                         <button
                           type="button"
                           onClick={() => {
@@ -2831,9 +4109,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <Edit3 className="w-3.5 h-3.5" />
                           <span>Edit</span>
                         </button>
+                        )}
 
-                        {/* DELETE BUTTON (SUPER ADMIN OR AUTHOR) */}
-                        {(isSuperAdmin || currentAdmin?.role === 'news_reporter') && (
+                        {/* DELETE BUTTON (SUPER ADMIN, OFFICIAL LEAGUE, OR AUTHOR) */}
+                        {(isSuperAdmin || isOfficialLeague || item.authorEmail === currentUserEmail || (currentAdmin?.role === 'news_reporter' && item.authorEmail === currentUserEmail)) && (
                           <button
                             type="button"
                             onClick={async () => {
@@ -2866,6 +4145,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* MODULE: EPL HIGHLIGHTS */}
+      {adminTab === 'highlights' && (isSuperAdmin || isOfficialLeague) && (
+        <EplHighlightAdmin currentAdmin={currentAdmin} showToast={showToast} />
+      )}
+
+      {/* MODULE: VIDEOS HUB */}
+      {adminTab === 'videos' && (isSuperAdmin || isOfficialLeague) && (
+        <VideoHighlightsAdmin currentAdmin={currentAdmin} showToast={showToast} />
       )}
 
       {/* MODULE 8: SUB-ADMIN APPOINTMENT ROSTER */}
@@ -2954,6 +4243,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-xs font-bold text-amber-300"
                     >
                       <option value="sub_admin">Sub-Admin (Match Duties & Scores)</option>
+                      <option value="official_league">Official League (Media & Official Content)</option>
                       <option value="news_reporter">News Reporter / Press Officer (News Only)</option>
                       <option value="super_admin">Super Admin (Full Governance)</option>
                     </select>
@@ -2984,8 +4274,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {admins.map((adm) => {
-                const isMainSuperAdmin = adm.email.toLowerCase() === 'itzjeda10@gmail.com';
-                const isSelf = adm.email.toLowerCase() === currentUserEmail.toLowerCase();
+                const isMainSuperAdmin = (adm.email || '').toLowerCase() === 'itzjeda10@gmail.com';
+                const isSelf = (adm.email || '').toLowerCase() === (currentUserEmail || '').toLowerCase();
 
                 return (
                   <div key={adm.email} className="p-5 rounded-2xl border bg-slate-950 border-slate-800 flex items-center justify-between gap-4">
@@ -2996,8 +4286,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded uppercase">Founder Super Admin</span>
                         ) : adm.role === 'super_admin' ? (
                           <span className="bg-amber-400/30 text-amber-300 text-[10px] font-black px-2 py-0.5 rounded uppercase border border-amber-400/40">Super Admin</span>
+                        ) : (adm.role === 'official_league' || adm.role === 'OFFICIAL_LEAGUE' || adm.role === 'spokesperson') ? (
+                          <span className="bg-amber-500/20 text-amber-300 text-[10px] font-black px-2 py-0.5 rounded uppercase border border-amber-500/40 flex items-center gap-1">
+                            Official League
+                            <VerifiedBadge role="official_league" />
+                          </span>
                         ) : adm.role === 'news_reporter' ? (
-                          <span className="bg-purple-900/80 text-purple-200 text-[10px] font-black px-2 py-0.5 rounded uppercase border border-purple-700">News Reporter</span>
+                          <span className="bg-purple-900/80 text-purple-200 text-[10px] font-black px-2 py-0.5 rounded uppercase border border-purple-700 flex items-center gap-1">
+                            News Reporter
+                            <VerifiedBadge role="news_reporter" />
+                          </span>
                         ) : (
                           <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded uppercase border border-emerald-500/30">Sub-Admin</span>
                         )}
@@ -3237,6 +4535,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {/* MODULE: LINEUPS BUILDER */}
+      {adminTab === 'lineups' && (
+        <LineupBuilder
+          matches={matches}
+          teams={teams}
+          players={players}
+          onSuccess={onRefreshAll}
+          onShowToast={showToast}
+          onClose={() => setAdminTab('controller')}
+        />
+      )}
+
       {/* MODULE 11: FIXTURES & BULK MATCH UPLOADER (FOR ALL ADMINS) */}
       {adminTab === 'fixtures' && (
         <div className="bg-slate-900/90 rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-800 space-y-6 text-slate-100 backdrop-blur-sm">
@@ -3323,6 +4633,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       .map(t => (
                         <option key={t.id} value={t.id}>{t.name} ({t.shortName})</option>
                       ))}
+                  </select>
+                </div>
+
+                {/* Competition Type */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Competition Type *</label>
+                  <select
+                    value={fixtureFormCompetitionType}
+                    onChange={(e) => setFixtureFormCompetitionType(e.target.value as 'League' | 'Cup')}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-100 cursor-pointer focus:ring-2 focus:ring-amber-400"
+                  >
+                    <option value="League">League (Standings)</option>
+                    <option value="Cup">Cup (Knockout Bracket)</option>
                   </select>
                 </div>
 
@@ -3516,7 +4839,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <td className="py-2.5 px-3 font-bold text-amber-300">MD {item.matchday}</td>
                               <td className="py-2.5 px-3 font-bold text-slate-100">{item.homeTeamName}</td>
                               <td className="py-2.5 px-3 font-bold text-slate-100">{item.awayTeamName}</td>
-                              <td className="py-2.5 px-3 font-mono text-slate-300">{item.date} @ {item.time}</td>
+                              <td className="py-2.5 px-3 font-mono text-slate-300">{item.date} @ {item.time} WAT</td>
                               <td className="py-2.5 px-3 text-slate-400">{item.venue}</td>
                             </tr>
                           ))}
@@ -3582,7 +4905,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-900 pt-2 font-mono">
-                      <span>{m.date} @ {m.time}</span>
+                      <span>{m.date} @ {m.time} WAT</span>
                       <span className="truncate max-w-[120px] text-right">{m.venue}</span>
                     </div>
 
@@ -3630,6 +4953,187 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
                 ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BULK DATA INGESTION TAB (SUPER ADMIN RESTRICTED) */}
+      {adminTab === 'bulk_upload' && (
+        <BulkUploadManager
+          teams={teams}
+          onSuccess={onRefreshAll}
+          onShowToast={showToast}
+        />
+      )}
+
+      {adminTab === 'bulk_teams' && (
+        <BulkTeamUploadManager
+          teams={teams}
+          onSuccess={onRefreshAll}
+          onShowToast={showToast}
+        />
+      )}
+
+      {adminTab === 'availability' && (
+        <PlayerAvailabilityManager
+          players={players}
+          teams={teams}
+          onRefresh={onRefreshAll}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* ADS MANAGER TAB (SUPER ADMIN RESTRICTED) */}
+      {adminTab === 'ads' && (
+        <AdsManager
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* PLAYER VALUATION CONTROL TAB */}
+      {adminTab === 'valuations' && (
+        <PlayerValuationManager
+          players={players}
+          teams={teams}
+          onRefresh={onRefreshAll}
+          onShowToast={showToast}
+        />
+      )}
+
+      {/* QUICK GOAL FOLLOW-UP DETAILS MODAL */}
+      {quickGoalModalOpen && quickGoalData && selectedMatch && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-slate-100 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2.5 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-black text-xl flex items-center justify-center">
+                  ⚽
+                </span>
+                <div>
+                  <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                    <span>Goal Details: {quickGoalData.teamName}</span>
+                  </h3>
+                  <p className="text-xs text-emerald-400 font-bold">
+                    Score Live: {selectedMatch.homeTeam?.shortName} {quickGoalData.newHomeScore} - {quickGoalData.newAwayScore} {selectedMatch.awayTeam?.shortName}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickGoalModalOpen(false);
+                  setQuickGoalData(null);
+                }}
+                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer font-bold text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800 text-xs text-slate-300 space-y-1">
+              <div className="font-bold text-amber-300">Live Score Updated Successfully!</div>
+              <div>Optionally tag the Goalscorer and Assist provider to log player stats, fantasy points, and feed ticker details.</div>
+            </div>
+
+            <div className="space-y-4">
+              {/* Goalscorer Dropdown */}
+              <div>
+                <label className="text-xs font-bold text-amber-300 uppercase block mb-1">
+                  Goal Scorer ({quickGoalData.teamName})
+                </label>
+                <select
+                  value={quickGoalPlayerId}
+                  onChange={(e) => setQuickGoalPlayerId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="">-- Select Goal Scorer --</option>
+                  {players
+                    .filter(p => p.teamId === quickGoalData.teamId)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>
+                        #{p.shirtNumber} {p.name} ({p.position})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {/* Assist Dropdown */}
+              <div>
+                <label className="text-xs font-bold text-slate-300 uppercase block mb-1">
+                  Assist Provider (Optional)
+                </label>
+                <select
+                  value={quickGoalAssisterId}
+                  onChange={(e) => setQuickGoalAssisterId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-100 focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="">-- Unassisted / No Assist --</option>
+                  {players
+                    .filter(p => p.teamId === quickGoalData.teamId && p.id !== quickGoalPlayerId)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>
+                        #{p.shirtNumber} {p.name} ({p.position})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {/* Goal Type */}
+                <div>
+                  <label className="text-xs font-bold text-slate-300 uppercase block mb-1">
+                    Goal Type
+                  </label>
+                  <select
+                    value={quickGoalType}
+                    onChange={(e) => setQuickGoalType(e.target.value as GoalType)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-100 cursor-pointer"
+                  >
+                    <option value="standard">Standard Regular</option>
+                    <option value="penalty">Penalty Kick</option>
+                    <option value="freekick">Free Kick</option>
+                    <option value="header">Header</option>
+                    <option value="own_goal">Own Goal</option>
+                  </select>
+                </div>
+
+                {/* Minute */}
+                <div>
+                  <label className="text-xs font-bold text-slate-300 uppercase block mb-1">
+                    Match Minute
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="120"
+                    value={quickGoalMinute}
+                    onChange={(e) => setQuickGoalMinute(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-100"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setQuickGoalModalOpen(false);
+                  setQuickGoalData(null);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer"
+              >
+                Skip Details
+              </button>
+              <button
+                type="button"
+                disabled={quickGoalSavingDetails}
+                onClick={handleSaveQuickGoalDetails}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-lg disabled:opacity-50"
+              >
+                {quickGoalSavingDetails ? 'Saving Event...' : 'Save Goal Details & Event'}
+              </button>
             </div>
           </div>
         </div>
@@ -3769,6 +5273,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </select>
                 </div>
               )}
+
+          
+      {adminTab === 'fantasy_config' && (
+        <div className="bg-slate-900/90 rounded-3xl p-6 shadow-2xl border border-slate-800 space-y-6 backdrop-blur-sm text-slate-100">
+          <div className="border-b border-slate-800 pb-3">
+            <h3 className="text-lg font-black text-slate-100 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-amber-400" />
+              Fantasy League Control
+            </h3>
+            <p className="text-xs text-slate-400">
+              Manage marketplace adjustments, budget configurations, global metrics, and chip usage overview.
+            </p>
+          </div>
+          
+          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col items-center justify-center min-h-[300px] text-center space-y-4">
+             <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center border-2 border-slate-800">
+               <Sliders className="w-8 h-8 text-amber-400 opacity-50" />
+             </div>
+             <div>
+               <h4 className="font-bold text-lg text-white">Fantasy Engine Configuration</h4>
+               <p className="text-sm text-slate-500 max-w-md mt-2">
+                 Marketplace budget algorithms, chip tracking metrics, and points engine parameters are active. Global metrics will be generated after Gameweek 1.
+               </p>
+             </div>
+             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mt-4">
+               <div className="flex items-center gap-2">
+                 <label className="text-white text-sm font-medium">Gameweek:</label>
+                 <input 
+                   type="number" 
+                   min="1" 
+                   value={finalizeGameweekId}
+                   onChange={e => setFinalizeGameweekId(parseInt(e.target.value) || 1)}
+                   className="w-20 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1 text-white text-sm"
+                 />
+               </div>
+               <button 
+                 onClick={async () => {
+                   if (!confirm(`Are you sure you want to Finalize Gameweek ${finalizeGameweekId}? This runs auto-subs, locks scores with strict BPS from live controllers, and is irreversible.`)) return;
+                   try {
+                     const res = await fetch('/api/admin/finalize-gameweek', {
+                       method: 'POST',
+                       headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify({ gameweekId: finalizeGameweekId })
+                     });
+                     
+                     const data = await res.json();
+                     if (!res.ok) throw new Error(data.error || 'Failed to finalize gameweek');
+                     
+                     showToast(`Gameweek ${finalizeGameweekId} Finalized! Auto-subs executed and points locked.`);
+                     onRefreshAll();
+                   } catch (err: any) {
+                     showToast(`Error: ${err.message}`);
+                   }
+                 }}
+                 className="px-6 py-2 bg-[#800020] hover:bg-rose-900 text-white font-bold text-sm rounded-xl border border-rose-800 cursor-pointer shadow-lg transition-colors"
+               >
+                 Finalize Gameweek {finalizeGameweekId} (Auto-Sub & Lock)
+               </button>
+             </div>
+          </div>
+        </div>
+      )}
+
+
+
 
               {eventTypeToLog === 'Sub' && (
                 <div>
