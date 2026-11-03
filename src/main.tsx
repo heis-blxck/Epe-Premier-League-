@@ -1,33 +1,28 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
 import App from './App.tsx';
 import './index.css';
 
 
 if ('serviceWorker' in navigator) {
-  if (import.meta.env.DEV) {
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      for (const registration of registrations) {
-        registration.unregister().catch(() => {});
-      }
-    }).catch(() => {});
-  } else {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js')
-        .then(registration => {
-          console.log('SW registered successfully:', registration);
-        })
-        .catch(err => {
-          console.log('SW registration fallback to firebase SW:', err);
-          navigator.serviceWorker.register('/firebase-messaging-sw.js').catch(() => {});
-        });
-    });
-  }
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(registration => {
+        console.log('SW registered successfully:', registration);
+        registration.update().catch(() => {});
+      })
+      .catch(err => {
+        console.warn('SW registration notice:', err);
+      });
+  });
 }
 
 createRoot(document.getElementById('root')!).render(
 
   <StrictMode>
-    <App />
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </StrictMode>,
 );

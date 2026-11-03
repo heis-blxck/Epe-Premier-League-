@@ -1,38 +1,49 @@
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useURLModal } from '../hooks/useURLModal';
 import React, { useState, useMemo } from 'react';
-import { useBackHandler } from '../utils/backManager';
+
 import { Team, Player, Match, UserAccount } from '../types';
 import { X, Calendar, MapPin, User, ChevronRight, Activity, Star, TrendingUp, Trophy, Heart } from 'lucide-react';
-import { PlayerProfileModal } from './PlayerProfileModal';
+
 
 interface TeamProfileModalProps {
-  team: Team;
+  teams: Team[];
   standings: Team[];
   players: Player[];
   matches: Match[];
   users?: UserAccount[];
-  onClose: () => void;
 }
 
-export const TeamProfileModal: React.FC<TeamProfileModalProps> = ({ team, standings, players, matches, users = [], onClose }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'roster' | 'top_performers'>('overview');
-  const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
+export const TeamProfileModal: React.FC<TeamProfileModalProps> = ({ teams, standings, players, matches, users = [] }) => {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { isOpen, closeModal, modalData } = useURLModal<{ teamId?: string, stage?: 'overview' | 'roster' | 'top_performers' }>('teamProfile');
+  const [activeTabState, setActiveTabState] = useState(searchParams.get('stage') || modalData?.stage || 'overview');
+  
+  React.useEffect(() => {
+    if (modalData?.stage) setActiveTabState(modalData.stage);
+    else setActiveTabState(searchParams.get('stage') || 'overview');
+  }, [modalData?.teamId, modalData?.stage]);
 
-  useBackHandler(() => {
-    if (selectedPlayer) {
-      setSelectedPlayer(null);
-      return true;
-    }
-    return false;
-  }, [selectedPlayer]);
+  const activeTab = activeTabState;
+  const setActiveTab = (tab: string) => {
+    setActiveTabState(tab);
+  };
+
+  if (!isOpen || !modalData?.teamId) return null;
+  const team = teams.find(t => t.id === modalData.teamId);
+  if (!team) return null;
+  
+
+  
 
 
   const leaguePosition = standings.findIndex(t => t.id === team.id) + 1;
 
   // Calculate registered fan count for this team
-  const fanCount = useMemo(() => {
-    if (!users || users.length === 0) return 0;
-    return users.filter(u => u.favoriteTeamId === team.id || u.favoriteTeamId === team.name).length;
-  }, [users, team.id, team.name]);
+  const fanCount = (!users || users.length === 0) 
+    ? 0 
+    : users.filter(u => u.favoriteTeamId === team.id || u.favoriteTeamId === team.name).length;
 
   // Filter matches for this team
   const teamMatches = matches.filter(m => m.homeTeamId === team.id || m.awayTeamId === team.id);
@@ -99,17 +110,17 @@ export const TeamProfileModal: React.FC<TeamProfileModalProps> = ({ team, standi
       {/* Backdrop */}
       <div 
         className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={closeModal}
       />
       
       {/* Modal Container */}
       <div className="relative w-full h-full sm:max-w-2xl bg-slate-900 sm:rounded-[2.5rem] overflow-hidden shadow-2xl border border-slate-800 flex flex-col max-h-[92dvh] my-auto">
         
         {/* Header Hero Section */}
-        <div className="bg-gradient-to-br from-[#800020] to-slate-950 relative pt-12 pb-6 px-6 sm:px-8 shrink-0 overflow-hidden border-b border-[#800020]">
+        <div className="bg-gradient-to-br from-[#800020] via-[#800020] to-slate-950 relative pt-12 pb-6 px-6 sm:px-8 shrink-0 overflow-hidden border-b border-[#881337]/50">
           {/* Close button */}
           <button 
-            onClick={onClose}
+            onClick={closeModal}
             className="absolute top-4 right-4 text-white/80 hover:text-white bg-black/20 hover:bg-black/40 p-2 rounded-full transition-colors z-20"
           >
             <X className="w-5 h-5" />
@@ -289,7 +300,7 @@ export const TeamProfileModal: React.FC<TeamProfileModalProps> = ({ team, standi
                       {posPlayers.map(player => (
                         <div 
                           key={player.id} 
-                          onClick={() => setSelectedPlayer(player)}
+                          onClick={() => navigate(`?modal=playerProfile&playerId=${player.id}`)}
                           className="flex items-center p-3 rounded-xl bg-slate-900 border border-slate-800 hover:border-amber-400/50 hover:bg-slate-800/90 transition-all cursor-pointer shadow-md group"
                         >
                           <img src={player.photoUrl} alt={player.name} className="w-10 h-10 rounded-full object-cover border border-slate-700 mr-3 group-hover:scale-105 transition-transform" />
@@ -320,7 +331,7 @@ export const TeamProfileModal: React.FC<TeamProfileModalProps> = ({ team, standi
                  return (
                    <div 
                      key={player.id} 
-                     onClick={() => setSelectedPlayer(player)}
+                     onClick={() => navigate(`?modal=playerProfile&playerId=${player.id}`)}
                      className="relative overflow-hidden bg-gradient-to-r from-slate-900 to-slate-950 rounded-2xl p-4 border border-slate-800 hover:border-amber-400/50 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer transition-all hover:scale-[1.01] group"
                    >
                      <div className="absolute top-0 right-0 w-32 h-full opacity-5 pointer-events-none">
@@ -374,13 +385,7 @@ export const TeamProfileModal: React.FC<TeamProfileModalProps> = ({ team, standi
         </div>
 
         {/* Selected Player Profile Popup Modal */}
-        {selectedPlayer && (
-          <PlayerProfileModal
-            player={selectedPlayer}
-            team={team}
-            onClose={() => setSelectedPlayer(null)}
-          />
-        )}
+        
       </div>
     </div>
   );

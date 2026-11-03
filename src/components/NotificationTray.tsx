@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { useURLModal } from '../hooks/useURLModal';
 import { AppNotification, ThemeMode } from '../types';
-import { useBackHandler } from '../utils/backManager';
+
 import { 
   Bell, 
   CheckCheck, 
@@ -37,16 +38,10 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
   notificationsEnabled,
   onToggleNotifications
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const { isOpen, closeModal, openModal } = useURLModal('notifications');
   const [filter, setFilter] = useState<'all' | 'match_goal' | 'news' | 'admin_alert'>('all');
 
-  useBackHandler(() => {
-    if (isOpen) {
-      setIsOpen(false);
-      return true;
-    }
-    return false;
-  }, [isOpen]);
+  
 
   const unreadCount = (notifications || []).filter(n => !n.read).length;
   const isDark = theme === 'dark';
@@ -73,7 +68,7 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
     <div className="relative">
       {/* Bell Button */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => isOpen ? closeModal() : openModal()}
         className={`relative p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
           isOpen
             ? 'bg-amber-400 text-slate-950 border-amber-400 shadow-lg scale-105'
@@ -98,7 +93,7 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
           {/* Backdrop overlay for mobile */}
           <div 
             className="fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-xs sm:hidden"
-            onClick={() => setIsOpen(false)}
+            onClick={() => closeModal()}
           />
 
           <div className={`fixed sm:absolute right-2 sm:right-0 top-16 sm:top-12 z-50 w-[calc(100vw-1rem)] sm:w-96 rounded-3xl shadow-2xl border transition-all overflow-hidden animate-fadeIn ${
@@ -122,7 +117,7 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
 
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setIsOpen(false)}
+                  onClick={() => closeModal()}
                   className={`p-1.5 rounded-lg transition-colors ${
                     isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-200 text-slate-600'
                   }`}
@@ -133,10 +128,10 @@ export const NotificationTray: React.FC<NotificationTrayProps> = ({
             </div>
 
             {/* Notification Permission Toggle Banner */}
-            <div className="bg-gradient-to-r from-amber-400/20 via-rose-900/30 to-slate-950 p-3 border-b border-slate-800 flex items-center justify-between gap-2">
+            <div className="bg-gradient-to-r from-[#800020]/25 via-[#881337]/20 to-slate-950 p-3 border-b border-slate-800 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs">
-                <Volume2 className="w-4 h-4 text-amber-400 shrink-0" />
-                <span className="font-extrabold text-[11px] text-amber-300">
+                <Volume2 className="w-4 h-4 text-[#FBB931] shrink-0" />
+                <span className="font-extrabold text-[11px] text-[#FFE3B3]">
                   Push Alerts: {notificationsEnabled ? 'Active' : 'Muted'}
                 </span>
               </div>

@@ -3,16 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-LP0SNN57VT"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-LP0SNN57VT');
+    </script>
+    <meta name="theme-color" content="#EA6113" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="EPL Command Center" />
     <meta name="format-detection" content="telephone=no" />
     <title>Epe Premier League | Official Live Command Center</title>
     <link rel="icon" type="image/jpeg" href="/app-icon.jpg" />
-    <link rel="apple-touch-icon" href="/app-icon.jpg" />
+    <link rel="apple-touch-icon" href="https://i.postimg.cc/Hxwhcv9R/Epe-Premier-League-App-Icon-20260728-072805-0000.png" />
     <link rel="apple-touch-startup-image" href="/logo.png" />
     <link rel="manifest" href="/manifest.json" />
     <link rel="preload" as="image" href="/logo.png" />
+    <script>
+      window.addEventListener('beforeinstallprompt', function(e) {
+        e.preventDefault();
+        window.deferredPwaPrompt = e;
+      });
+    </script>
   </head>
   <body class="bg-slate-950 text-slate-100">
     <div id="root"></div>

@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Team, Match } from '../types';
 import { Trophy, ArrowUp, ArrowDown, Minus, Zap } from 'lucide-react';
 import { computeLiveGhostStandings } from '../utils/liveStandingsProjection';
+import { TeamLogo } from './TeamLogo';
 
 interface StandingsTableProps {
   standings: Team[];
@@ -36,11 +37,11 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ standings, match
         <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-slate-300">
           <span className="flex items-center gap-1.5 bg-slate-900/60 px-3 py-1.5 rounded-full border border-slate-800 shadow-sm">
             <span className="w-2.5 h-2.5 rounded-full bg-[#1cd861]"></span>
-            1st: Champions
+            Champions Zone
           </span>
           <span className="flex items-center gap-1.5 bg-slate-900/60 px-3 py-1.5 rounded-full border border-slate-800 shadow-sm">
             <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
-            Relegation Zone
+            Bottom Zone
           </span>
         </div>
       </div>
@@ -136,13 +137,9 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({ standings, match
                   <td className="py-3 sm:py-4 px-1 sm:px-3 truncate">
                     <div className="flex items-center gap-1.5 sm:gap-3">
                       <div className="relative shrink-0">
-                        <img 
-                          src={team.logoUrl} 
-                          alt={team.name} 
-                          className={`rounded-full object-cover bg-slate-900 border-2 ${isFirst ? 'w-9 h-9 sm:w-12 sm:h-12 border-[#1cd861] shadow-[0_0_12px_rgba(28,216,97,0.3)]' : 'w-7 h-7 sm:w-9 sm:h-9 border-slate-700'}`}
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=64&q=80';
-                          }}
+                        <TeamLogo 
+                          team={team} 
+                          className={isFirst ? 'w-9 h-9 sm:w-12 sm:h-12 border-2 border-[#1cd861] shadow-[0_0_12px_rgba(28,216,97,0.3)]' : 'w-7 h-7 sm:w-9 sm:h-9'}
                         />
                         {team.isLivePlaying && (
                           <span className="absolute -bottom-1 -right-1 w-3 h-3 bg-emerald-500 border-2 border-slate-900 rounded-full animate-ping"></span>

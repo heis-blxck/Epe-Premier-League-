@@ -22,7 +22,7 @@ import {
 interface MandatoryLoginGateProps {
   teams: Team[];
   admins: AdminUser[];
-  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string) => Promise<void>;
+  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string) => Promise<void>;
   theme: ThemeMode;
   settings?: AppSettings | null;
 }
@@ -63,8 +63,31 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
       const reader = new FileReader();
       reader.onloadend = () => {
         if (typeof reader.result === 'string') {
-          setSelectedAvatar(reader.result);
-          setErrorMsg(null);
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 400;
+            const MAX_HEIGHT = 400;
+            let width = img.width;
+            let height = img.height;
+            if (width > height) {
+              if (width > MAX_WIDTH) { height = Math.round(height * (MAX_WIDTH / width)); width = MAX_WIDTH; }
+            } else {
+              if (height > MAX_HEIGHT) { width = Math.round(width * (MAX_HEIGHT / height)); height = MAX_HEIGHT; }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              setSelectedAvatar(canvas.toDataURL('image/webp', 0.8));
+              setErrorMsg(null);
+            } else {
+              setSelectedAvatar(reader.result);
+              setErrorMsg(null);
+            }
+          };
+          img.src = reader.result;
         }
       };
       reader.readAsDataURL(file);
@@ -90,10 +113,15 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
         emailInput.trim(), 
         authMode === 'signup' ? nameInput.trim() || undefined : undefined, 
         authMode === 'signup' ? (selectedTeam || undefined) : undefined,
-        authMode === 'signup' ? selectedAvatar : undefined
+        authMode === 'signup' ? selectedAvatar : undefined,
+        undefined,
+        passwordInput.trim() || undefined
       );
     } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication failed. Please check your credentials.');
+      console.error("User Signup/Auth Error in MandatoryLoginGate:", err);
+      const codeStr = err?.code ? `[${err.code}] ` : '';
+      const msgStr = err?.message || (typeof err === 'string' ? err : 'Authentication failed.');
+      setErrorMsg(`${codeStr}${msgStr}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -407,7 +435,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full bg-gradient-to-r from-[#800020] via-rose-900 to-amber-700 hover:from-rose-900 hover:to-amber-600 text-amber-300 border border-amber-400/40 font-black py-3.5 rounded-xl text-sm transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full bg-gradient-to-r from-[#800020] via-[#881337] to-[#FBB931] hover:brightness-110 text-slate-950 font-black py-3.5 rounded-xl text-sm transition-all shadow-xl shadow-[#800020]/25 flex items-center justify-center gap-2 cursor-pointer border border-[#FFE3B3]/40"
                 >
                   {isSubmitting ? (
                     <span>Authenticating Account...</span>

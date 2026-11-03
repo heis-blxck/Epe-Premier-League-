@@ -1,7 +1,8 @@
+import { useNavigate } from 'react-router-dom';
 import React, { useState } from 'react';
 import { Player, Team } from '../types';
 import { Trophy, Star, Award, Flame, Shield, ChevronRight } from 'lucide-react';
-import { PlayerProfileModal } from './PlayerProfileModal';
+
 
 interface MasterLeaderboardWidgetProps {
   title: string;
@@ -20,7 +21,8 @@ export const MasterLeaderboardWidget: React.FC<MasterLeaderboardWidgetProps> = (
   metricLabel,
   isFantasy = false
 }) => {
-  const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
+  
+  const navigate = useNavigate();
 
   if (!players || players.length === 0) {
     return (
@@ -70,7 +72,7 @@ export const MasterLeaderboardWidget: React.FC<MasterLeaderboardWidgetProps> = (
                   src={heroItem.player.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=180&q=80'}
                   alt={heroItem.player.name}
                   className="w-20 h-20 rounded-2xl object-cover border-2 border-emerald-500/80 shadow-2xl cursor-pointer hover:scale-105 transition-transform"
-                  onClick={() => setSelectedPlayer(heroItem.player)}
+                  onClick={() => navigate(`?modal=playerProfile&playerId=${heroItem.player.id}`)}
                 />
                 <span className="absolute -bottom-2 -right-2 px-1.5 py-0.5 bg-amber-400 text-slate-950 font-black text-[9px] rounded uppercase shadow">
                   {heroItem.player.position}
@@ -81,7 +83,7 @@ export const MasterLeaderboardWidget: React.FC<MasterLeaderboardWidgetProps> = (
                 <span className="text-xs font-extrabold text-emerald-400 uppercase tracking-wider">
                   #1 Ranked SuperStar
                 </span>
-                <h3 className="text-lg font-black text-white mt-0.5 cursor-pointer hover:text-emerald-400 transition-colors" onClick={() => setSelectedPlayer(heroItem.player)}>
+                <h3 className="text-lg font-black text-white mt-0.5 cursor-pointer hover:text-emerald-400 transition-colors" onClick={() => navigate(`?modal=playerProfile&playerId=${heroItem.player.id}`)}>
                   {heroItem.player.name}
                 </h3>
                 <p className="text-xs text-slate-400">
@@ -106,7 +108,7 @@ export const MasterLeaderboardWidget: React.FC<MasterLeaderboardWidgetProps> = (
               <span className="w-6 h-6 rounded-lg bg-emerald-950 text-white font-black flex items-center justify-center text-xs shadow">
                 1
               </span>
-              <span className="font-extrabold tracking-wide cursor-pointer hover:text-emerald-200 transition-colors" onClick={() => setSelectedPlayer(heroItem.player)}>{heroItem.player.name}</span>
+              <span className="font-extrabold tracking-wide cursor-pointer hover:text-emerald-200 transition-colors" onClick={() => navigate(`?modal=playerProfile&playerId=${heroItem.player.id}`)}>{heroItem.player.name}</span>
               <span className="text-emerald-200 text-[11px] hidden sm:inline-block">
                 {heroItem.player.position} {heroItem.displaySub ? `· ${heroItem.displaySub}` : ''}
               </span>
@@ -136,11 +138,11 @@ export const MasterLeaderboardWidget: React.FC<MasterLeaderboardWidgetProps> = (
                         src={item.player.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=180&q=80'}
                         alt={item.player.name}
                         className="w-10 h-10 rounded-full object-cover border border-slate-700 cursor-pointer hover:scale-105 transition-transform shrink-0"
-                        onClick={() => setSelectedPlayer(item.player)}
+                        onClick={() => navigate(`?modal=playerProfile&playerId=${item.player.id}`)}
                       />
 
                       <div className="truncate">
-                        <h5 className="font-bold text-white text-xs hover:text-amber-400 transition-colors cursor-pointer truncate" onClick={() => setSelectedPlayer(item.player)}>
+                        <h5 className="font-bold text-white text-xs hover:text-amber-400 transition-colors cursor-pointer truncate" onClick={() => navigate(`?modal=playerProfile&playerId=${item.player.id}`)}>
                           {item.player.name}
                         </h5>
                         <div className="text-[10px] text-slate-500 font-medium truncate">
@@ -164,13 +166,7 @@ export const MasterLeaderboardWidget: React.FC<MasterLeaderboardWidgetProps> = (
         </div>
       )}
 
-      {selectedPlayer && (
-        <PlayerProfileModal
-          player={selectedPlayer}
-          teams={Array.from(teamsMap.values())}
-          onClose={() => setSelectedPlayer(null)}
-        />
-      )}
+      
     </div>
   );
 };

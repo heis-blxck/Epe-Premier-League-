@@ -1,8 +1,9 @@
+import { useNavigate } from 'react-router-dom';
 import React, { useState, useEffect } from "react";
 import { LeagueStats as StatsType, Team, Player, PlayerOfTheMonth, Match } from "../types";
 import { api } from "../services/api";
 import { MasterLeaderboardWidget } from "./MasterLeaderboardWidget";
-import { PlayerProfileModal } from './PlayerProfileModal';
+
 import { Flame, Award, ShieldCheck, Trophy, Star } from "lucide-react";
 
 interface LeagueStatsProps {
@@ -16,8 +17,9 @@ interface LeagueStatsProps {
 
 export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competition = "league", matches = [], onSelectPlayer, players = [] }) => {
   const [activeCategory, setActiveCategory] = useState<'goals' | 'assists' | 'cleanSheets' | 'topPerformers'>('goals');
+  const navigate = useNavigate();
   const [potmList, setPotmList] = useState<PlayerOfTheMonth[]>([]);
-  const [selectedProfile, setSelectedProfile] = useState<Player | null>(null);
+  
 
   const teamsMap = new Map<string, Team>(teams.map(t => [t.id, t]));
 
@@ -30,24 +32,18 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competit
   const latestPotm = potmList[0];
 
   const getLeaderboardData = () => {
-    let playersList: Player[] = [];
+    let playersList: Player[] = players && players.length > 0 ? players : [];
+    
+
     if (competition === "cup") {
-      if (activeCategory === "goals") playersList = stats.cupTopScorers || [];
-      else if (activeCategory === "assists") playersList = stats.cupTopAssists || [];
-      else if (activeCategory === "cleanSheets") playersList = stats.cupCleanSheets || [];
-      else playersList = stats.cupTopPerformers || stats.cupTopScorers || [];
-    } else {
-      if (activeCategory === "goals") playersList = stats.topScorers || [];
-      else if (activeCategory === "assists") playersList = stats.topAssists || [];
-      else if (activeCategory === "cleanSheets") playersList = stats.cleanSheets || [];
-      else playersList = stats.topPerformers || stats.topScorers || [];
+      playersList = playersList.filter(p => (p.cupGoals || 0) > 0 || (p.cupAssists || 0) > 0 || (p.cupCleanSheets || 0) > 0);
     }
 
     return playersList.map(player => {
       const isCup = competition === 'cup';
-      const g = isCup ? (player.cupGoals || 0) : player.goals;
-      const a = isCup ? (player.cupAssists || 0) : player.assists;
-      const cs = isCup ? (player.cupCleanSheets || 0) : player.cleanSheets;
+      const g = isCup ? (player.cupGoals || 0) : (player.goals || 0);
+      const a = isCup ? (player.cupAssists || 0) : (player.assists || 0);
+      const cs = isCup ? (player.cupCleanSheets || 0) : (player.cleanSheets || 0);
       const rating = player.ratingAverage || 6.0;
 
       let value: number | string = 0;
@@ -57,7 +53,7 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competit
         const csPts = (player.position === 'DEF' || player.position === 'GK') ? cs * 5 : (player.position === 'MID' ? cs * 2 : 0);
         const impactScore = g * 5 + a * 3 + csPts + Math.max(0, (rating - 5.0) * 4);
         value = Math.round(impactScore);
-        displaySub = `⚽ ${g} Goals | 👟 ${a} Assists | 🛡️ ${cs} CS | ⭐ ${rating.toFixed(2)}`;
+        displaySub = `⚽ ${g} Goals | 👟 ${a} Assists`;
       } else if (activeCategory === 'goals') {
         value = g;
         displaySub = `Rating: ${rating.toFixed(2)}`;
@@ -74,22 +70,27 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competit
         value,
         displaySub
       };
-    }).sort((x, y) => Number(y.value) - Number(x.value));
+    }).filter(x => {
+      if (activeCategory === 'goals') return Number(x.value) > 0;
+      if (activeCategory === 'assists') return Number(x.value) > 0;
+      if (activeCategory === 'cleanSheets') return Number(x.value) > 0 && ['GK', 'GOALKEEPER'].includes((x.player.position || '').toUpperCase());
+      return true;
+    }).sort((x, y) => Number(y.value) - Number(x.value)).slice(0, 15);
   };
 
   const currentData = getLeaderboardData();
+
 
   const getTitleAndSubtitle = () => {
     const compName = competition === 'cup' ? 'Cup' : 'League';
     if (activeCategory === 'goals') return { title: `${compName} Golden Boot (Top Scorers)`, subtitle: `Leading goalscorers across all ${compName.toLowerCase()} fixtures.` };
     if (activeCategory === 'assists') return { title: `${compName} Playmaker Award (Top Assists)`, subtitle: `Most assists provided in ${compName.toLowerCase()} fixtures.` };
-    if (activeCategory === 'cleanSheets') return { title: `${compName} Golden Glove (Clean Sheets)`, subtitle: `Goalkeepers and defenders with clean sheets in ${compName.toLowerCase()} fixtures.` };
-    return { title: `${compName} ${competition === 'cup' ? 'Cup Stars' : 'League Stars'}`, subtitle: `Highest impact scores based on goals, assists, clean sheets & ratings.` };
+    if (activeCategory === 'cleanSheets') return { title: `${compName} Golden Glove (Clean Sheets)`, subtitle: `Goalkeepers with clean sheets in ${compName.toLowerCase()} fixtures.` };
+    return { title: competition === 'cup' ? 'Cup Stars' : 'League Stars', subtitle: `Highest impact scores based on goals, assists, clean sheets & ratings.` };
   };
 
   const { title, subtitle } = getTitleAndSubtitle();
   const metricLabel = activeCategory === 'topPerformers' ? 'Impact Score' : activeCategory === 'goals' ? 'Goals' : activeCategory === 'assists' ? 'Assists' : 'Clean Sheets';
-
   const starsLabel = competition === 'cup' ? 'Cup Stars' : 'League Stars';
 
   return (
@@ -100,12 +101,12 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competit
           onClick={() => {
             const player = players.find(p => p.name === latestPotm.playerName);
             if (player) {
-              setSelectedProfile(player);
+              navigate(`?modal=playerProfile&playerId=${player.id}`);
             }
           }}
         >
           {/* Trading Card Container */}
-          <div className="relative bg-gradient-to-br from-[#800020] to-[#3a000c] rounded-[2rem] overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.6)] border-2 border-[#a00028] flex flex-col w-full mb-6 relative" style={{ aspectRatio: '2.5 / 3.5' }}>
+          <div className="relative bg-gradient-to-br from-[#800020] via-[#58061e] to-[#3b0213] rounded-[2rem] overflow-hidden shadow-[0_20px_50px_rgba(128,0,32,0.45)] border-2 border-[#FBB931] flex flex-col w-full mb-6 relative" style={{ aspectRatio: '2.5 / 3.5' }}>
             
             {/* Top Bar */}
             <div className="p-5 md:p-6 flex justify-between items-start z-20 relative bg-black/20 backdrop-blur-sm border-b border-white/10 shrink-0">
@@ -172,6 +173,7 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competit
         </div>
 
         {/* Tab Pills */}
+        {true && (
         <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl w-full xl:w-auto border border-slate-800 flex-wrap sm:flex-nowrap">
           <button
             onClick={() => setActiveCategory('goals')}
@@ -221,24 +223,25 @@ export const LeagueStats: React.FC<LeagueStatsProps> = ({ stats, teams, competit
             <span>{starsLabel}</span>
           </button>
         </div>
+        )}
       </div>
 
       {/* Master Leaderboard Widget Deployment */}
-      <MasterLeaderboardWidget
-        title={title}
-        subtitle={subtitle}
-        players={currentData}
-        teamsMap={teamsMap}
-        metricLabel={metricLabel}
-      />
-
-      {selectedProfile && (
-        <PlayerProfileModal
-          player={selectedProfile}
-          team={teamsMap.get(selectedProfile.teamId)}
-          onClose={() => setSelectedProfile(null)}
+      {currentData.length > 0 ? (
+        <MasterLeaderboardWidget
+          title={title}
+          subtitle={subtitle}
+          players={currentData}
+          teamsMap={teamsMap}
+          metricLabel={metricLabel}
         />
+      ) : (
+        <div className="bg-slate-900/60 rounded-3xl p-8 border border-slate-800 text-center mt-6 shadow-md backdrop-blur-sm">
+          <p className="text-slate-400 font-bold text-lg">No statistics recorded for this category yet.</p>
+        </div>
       )}
+
+      
     </div>
   );
 };

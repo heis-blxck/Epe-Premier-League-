@@ -1,14 +1,18 @@
-import { initializeApp } from 'firebase/app';
-import { getMessaging, getToken } from 'firebase/messaging';
 import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useURLModal } from './hooks/useURLModal';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Match, Team, Player, NewsArticle, LeagueStats as LeagueStatsType, AdminUser, UserAccount, AppNotification, ThemeMode, AppSettings, Advertisement } from './types';
 import { api } from './services/api';
+import { signupUserToSupabase } from './services/userService';
 import { AdDisplay } from './components/AdDisplay';
 import { Header } from './components/Header';
 import { EpeLogo } from './components/EpeLogo';
 
 
 import { TodayMatchesStrip } from './components/TodayMatchesStrip';
+import { SponsorshipBanner } from './components/SponsorshipBanner';
+import { MatchdayPredictor } from './components/MatchdayPredictor';
 import { StandingsTable } from './components/StandingsTable';
 import { LeagueStats } from './components/LeagueStats';
 import { NewsFeed } from './components/NewsFeed';
@@ -17,16 +21,23 @@ import { FantasyLeagueView } from './components/FantasyLeagueView';
 import { CupPanel } from './components/CupPanel';
 import { MatchDetailModal } from './components/MatchDetailModal';
 import { TeamProfileModal } from './components/TeamProfileModal';
+import { PlayerProfileModal } from './components/PlayerProfileModal';
 import { UserAuthDeckModal } from './components/UserAuthDeckModal';
 import { MandatoryLoginGate } from './components/MandatoryLoginGate';
 import { AboutPage } from './components/AboutPage';
-import { handleBack, useBackHandler } from './utils/backManager';
+
 import { Shield, Sparkles, RefreshCw, Trophy, Radio, Newspaper, Goal, X, Bell, Star, WifiOff } from 'lucide-react';
 
 const splashLogo = '/logo.png';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'matches' | 'standings' | 'news' | 'fantasy' | 'cup' | 'admin' | 'about'>('matches');
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Extract activeTab from URL pathname, default to 'matches'
+  const pathName = location.pathname.split('/')[1] || 'matches';
+  const validTabs = ['matches', 'standings', 'news', 'fantasy', 'cup', 'admin', 'about'];
+  const activeTab = validTabs.includes(pathName) ? pathName as any : 'matches';
 
   const [matches, setMatches] = useState<Match[]>([]);
   const [standings, setStandings] = useState<Team[]>([]);
@@ -52,7 +63,16 @@ export default function App() {
     return (localStorage.getItem('epl_theme') as ThemeMode) || 'dark';
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
-  const [isAuthDeckOpen, setIsAuthDeckOpen] = useState<boolean>(false);
+  
+  const [searchParams] = useSearchParams();
+  const { openModal: openAuthDeck } = useURLModal('authDeck');
+  const { modalData: matchData, openModal: openMatchModal } = useURLModal<{ matchId: string }>('matchDetail');
+  const { openModal: openTeamModal } = useURLModal<{ teamId: string }>('teamProfile');
+
+  const selectedMatch = matches.find(m => m.id === matchData?.matchId) || null;
+  const setSelectedMatch = (m: Match | null) => { if (m) openMatchModal({ matchId: m.id }); };
+  const setSelectedTeamProfile = (t: Team | null) => { if (t) openTeamModal({ teamId: t.id }); };
+  const setIsAuthDeckOpen = (open: boolean) => { if (open) openAuthDeck(); };
   const [toastNotif, setToastNotif] = useState<AppNotification | null>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -71,8 +91,7 @@ export default function App() {
   };
 
   const [users, setUsers] = useState<UserAccount[]>([]);
-  const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
-  const [selectedTeamProfile, setSelectedTeamProfile] = useState<Team | null>(null);
+  
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
@@ -81,46 +100,88 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [showOfflineModal, setShowOfflineModal] = useState<boolean>(false);
 
-  // Hardware Back Button Integration
-  useEffect(() => {
-    // Push dummy state to catch the back event
-    window.history.pushState({ isAppBack: true }, '', window.location.href);
+  const lastBackPressRef = useRef<number>(0);
 
-    const onPopState = (e: PopStateEvent) => {
-      const handled = handleBack();
-      if (handled) {
-        // If handled by our router, restore the back-stop dummy state
-        window.history.pushState({ isAppBack: true }, '', window.location.href);
-      } else {
-        // Not handled -> we are at root, exit the app natively.
+  // Strict Back Navigation Interceptor Logic (Capacitor & URL-based modal aware)
+  useEffect(() => {
+    let capacitorListenerPromise: Promise<any> | null = null;
+
+    if (typeof window !== 'undefined' && (window as any).Capacitor) {
+      capacitorListenerPromise = CapacitorApp.addListener('backButton', () => {
+        const search = window.location.search;
+        const path = window.location.pathname;
+        const tab = path.split('/')[1] || 'matches';
+
+        // 1. Check for Offline Modal or URL Modal parameter
+        if (showOfflineModal) {
+          setShowOfflineModal(false);
+          return;
+        }
+
+        if (search.includes('modal=')) {
+          // Defer to History API to close modal smoothly
+          window.history.back();
+          return;
+        }
+
+        // 2. No modal open -> if on non-matches tab, navigate back to 'matches'
+        if (tab !== 'matches') {
+          navigate('/matches', { replace: true });
+          return;
+        }
+
+        // 3. No modal open AND on 'matches' tab -> Double tap back to exit app
+        const now = Date.now();
+        if (now - lastBackPressRef.current < 2000) {
+          CapacitorApp.exitApp();
+        } else {
+          lastBackPressRef.current = now;
+          displayToast({
+            id: Date.now().toString(),
+            title: 'Exit App',
+            message: 'Press back again to exit',
+            type: 'system',
+            eventType: 'Fixtures',
+            read: false,
+            timestamp: new Date().toISOString()
+          }, 2000);
+        }
+      });
+    }
+
+    return () => {
+      if (capacitorListenerPromise) {
+        capacitorListenerPromise.then(sub => sub.remove?.());
       }
     };
+  }, [navigate, showOfflineModal]);
 
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  const setActiveTab = (tab: string) => {
+    if (tab === activeTab) return;
+    if (tab === 'matches') {
+      navigate('/matches', { replace: true });
+    } else {
+      if (activeTab === 'matches') {
+        navigate(`/${tab}`);
+      } else {
+        navigate(`/${tab}`, { replace: true });
+      }
+    }
+  };
 
-  useBackHandler(() => {
-    if (showOfflineModal) return false; // Don't close offline modal with back
-
-    if (selectedMatch) {
-      setSelectedMatch(null);
-      return true;
+  const handleTabChange = (tab: 'matches' | 'standings' | 'news' | 'fantasy' | 'cup' | 'admin' | 'about') => {
+    if (tab === activeTab) return;
+    if (tab === 'matches') {
+      navigate('/matches', { replace: true });
+    } else {
+      if (activeTab === 'matches') {
+        navigate(`/${tab}`);
+      } else {
+        navigate(`/${tab}`, { replace: true });
+      }
     }
-    if (selectedTeamProfile) {
-      setSelectedTeamProfile(null);
-      return true;
-    }
-    if (isAuthDeckOpen) {
-      setIsAuthDeckOpen(false);
-      return true;
-    }
-    if (activeTab !== 'matches') {
-      setActiveTab('matches');
-      return true;
-    }
-    return false;
-  }, [selectedMatch, selectedTeamProfile, isAuthDeckOpen, activeTab, showOfflineModal]);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
 
   useEffect(() => {
@@ -164,13 +225,23 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('epl_active_user', JSON.stringify(currentUser));
-      if (notificationsEnabled) {
-        requestFCMToken();
-      }
     } else {
       localStorage.removeItem('epl_active_user');
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    if (currentUser && notificationsEnabled) {
+      requestFCMToken();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.email, notificationsEnabled]);
+
+  useEffect(() => {
+    if (settings?.appName) {
+      document.title = settings.appName;
+    }
+  }, [settings?.appName]);
 
   // Apply theme class to document body / root
   useEffect(() => {
@@ -220,13 +291,23 @@ export default function App() {
         setShowOfflineModal(false);
       }
 
-      if (resMatches.status === 'fulfilled') setMatches(resMatches.value);
-      if (resStandings.status === 'fulfilled') setStandings(resStandings.value);
+      const loadedTeams = resTeams.status === 'fulfilled' ? (resTeams.value || []).filter(Boolean) : [];
+      if (resTeams.status === 'fulfilled') setTeams(loadedTeams);
+
+      let loadedMatches = resMatches.status === 'fulfilled' ? (resMatches.value || []).filter(Boolean) : [];
+      loadedMatches = loadedMatches.map(m => ({
+          ...m,
+          homeTeam: m.homeTeam || loadedTeams.find(t => t.id === m.homeTeamId),
+          awayTeam: m.awayTeam || loadedTeams.find(t => t.id === m.awayTeamId),
+      }));
+      if (resMatches.status === 'fulfilled') setMatches(loadedMatches);
+
+      if (resStandings.status === 'fulfilled') setStandings((resStandings.value || []).filter(Boolean));
+      if (resPlayers.status === 'fulfilled') setPlayers((resPlayers.value || []).filter(Boolean));
+
       if (resStats.status === 'fulfilled') setStats(resStats.value);
-      if (resNews.status === 'fulfilled') setNews(resNews.value);
-      if (resTeams.status === 'fulfilled') setTeams(resTeams.value);
-      if (resPlayers.status === 'fulfilled') setPlayers(resPlayers.value);
-      if (resAdmins.status === 'fulfilled') setAdmins(resAdmins.value);
+      if (resNews.status === 'fulfilled') setNews((resNews.value || []).filter(Boolean));
+      if (resAdmins.status === 'fulfilled') setAdmins((resAdmins.value || []).filter(Boolean));
       if (resSettings.status === 'fulfilled') setSettings(resSettings.value);
       if (resAds.status === 'fulfilled') setAdvertisements(resAds.value);
       if (resUsers.status === 'fulfilled') {
@@ -263,14 +344,33 @@ export default function App() {
 
 
 
-  // Server-Sent Events for Real-Time Notifications
+    // Server-Sent Events for Real-Time Notifications
+  const processedNotifs = React.useRef(new Set<string>());
+
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem('processedNotifs');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        parsed.forEach((id: string) => processedNotifs.current.add(id));
+      }
+    } catch(e) {}
+
     const sse = new EventSource('/api/notifications/stream');
     
     sse.onmessage = async (event) => {
       try {
         const notif = JSON.parse(event.data);
         if (!notif || !notif.id) return;
+
+        if (processedNotifs.current.has(notif.id)) return;
+        processedNotifs.current.add(notif.id);
+
+        try {
+          const arr = Array.from(processedNotifs.current).slice(-50);
+          localStorage.setItem('processedNotifs', JSON.stringify(arr));
+        } catch(e) {}
+
         setNotifications(prev => {
           if (prev.some(n => n.id === notif.id)) return prev;
           return [notif, ...prev];
@@ -312,14 +412,11 @@ export default function App() {
     return () => {
       sse.close();
     };
-  }, [currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.email]);
 
 
   
-  useEffect(() => {
-
-  }, [currentUser, notificationsEnabled]);
-
   useEffect(() => {
     loadData();
 
@@ -328,10 +425,12 @@ export default function App() {
       setIsLoading(false);
     }, 1000);
 
-    // Auto refresh live scores & notifications every 8 seconds
+    // Auto refresh live scores & notifications every 45 seconds when tab is visible
     const interval = setInterval(() => {
-      loadData();
-    }, 8000);
+      if (!document.hidden) {
+        loadData();
+      }
+    }, 45000);
 
     return () => {
       clearTimeout(timer);
@@ -340,11 +439,26 @@ export default function App() {
   }, []);
 
   // User Auth Deck Handlers
-  const handleLogin = async (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string) => {
+  const handleLogin = async (
+    email: string, 
+    name?: string, 
+    favoriteTeamId?: string, 
+    avatarUrl?: string, 
+    fantasyTeamName?: string,
+    password?: string
+  ) => {
     if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
       await Notification.requestPermission();
     }
+
+    // Verify server database availability and save user on server first
     const user = await api.loginUser(email, name, favoriteTeamId, avatarUrl, fantasyTeamName);
+
+    // If name is provided, this is a User Signup operation: write user to Supabase 'users' table
+    if (name) {
+      await signupUserToSupabase(email, password, name, favoriteTeamId, avatarUrl, fantasyTeamName);
+    }
+
     currentUserRef.current = user;
     setCurrentUser(user);
     if (user.themePreference) setTheme(user.themePreference);
@@ -381,18 +495,51 @@ export default function App() {
 
   // Notification Handlers
   const handleMarkNotificationRead = async (id: string) => {
-    await api.markNotificationRead(id);
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    try {
+      await api.markNotificationRead(id);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    } catch (err: any) {
+      displayToast({
+        id: `err-${Date.now()}`,
+        title: 'Error',
+        message: err.message || 'Failed to mark notification read',
+        type: 'admin_alert',
+        timestamp: new Date().toISOString(),
+        read: false
+      }, 5000);
+    }
   };
 
   const handleMarkAllNotificationsRead = async () => {
-    await api.markAllNotificationsRead();
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    try {
+      await api.markAllNotificationsRead();
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    } catch (err: any) {
+      displayToast({
+        id: `err-${Date.now()}`,
+        title: 'Error',
+        message: err.message || 'Failed to mark all notifications read',
+        type: 'admin_alert',
+        timestamp: new Date().toISOString(),
+        read: false
+      }, 5000);
+    }
   };
 
   const handleClearNotifications = async () => {
-    await api.clearNotifications();
-    setNotifications([]);
+    try {
+      await api.clearNotifications();
+      setNotifications([]);
+    } catch (err: any) {
+      displayToast({
+        id: `err-${Date.now()}`,
+        title: 'Error',
+        message: err.message || 'Failed to clear notifications',
+        type: 'admin_alert',
+        timestamp: new Date().toISOString(),
+        read: false
+      }, 5000);
+    }
   };
 
   const handleTriggerTestNotification = async () => {
@@ -436,10 +583,21 @@ export default function App() {
     }
   };
 
-  const handleToggleTheme = (mode: ThemeMode) => {
+  const handleToggleTheme = async (mode: ThemeMode) => {
     setTheme(mode);
     if (currentUser) {
-      handleUpdateProfile({ email: currentUser.email, themePreference: mode });
+      try {
+        await handleUpdateProfile({ email: currentUser.email, themePreference: mode });
+      } catch (err: any) {
+        displayToast({
+          id: `err-${Date.now()}`,
+          title: 'Error',
+          message: err.message || 'Failed to save theme preference',
+          type: 'admin_alert',
+          timestamp: new Date().toISOString(),
+          read: false
+        }, 5000);
+      }
     }
   };
 
@@ -448,35 +606,12 @@ export default function App() {
 
   const requestFCMToken = async () => {
     try {
-      if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) return;
-      const permission = await Notification.requestPermission();
-      if (permission === 'granted') {
-        const configRes = await fetch('/api/firebase-config');
-        if (!configRes.ok) return;
-        const config = await configRes.json();
-        
-        const app = initializeApp(config);
-        const messaging = getMessaging(app);
-        
-        const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-        if (!vapidKey) return;
-
-        const swReadyPromise = navigator.serviceWorker.ready;
-        const timeoutPromise = new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000));
-        const swRegistration = await Promise.race([swReadyPromise, timeoutPromise]);
-        if (!swRegistration) return;
-
-        const currentToken = await getToken(messaging, { 
-          vapidKey,
-          serviceWorkerRegistration: swRegistration
-        });
-        
-        if (currentToken && currentUser) {
-          console.log('FCM Token acquired', currentToken);
-        }
+      if (typeof window === 'undefined' || !('Notification' in window)) return;
+      if (Notification.permission === 'default') {
+        await Notification.requestPermission();
       }
     } catch (e) {
-      console.warn('FCM token acquisition skipped or failed:', e);
+      console.warn('Notification permission check skipped or failed:', e);
     }
   };
 
@@ -486,32 +621,59 @@ export default function App() {
       requestFCMToken();
     }
     if (currentUser) {
-      await handleUpdateProfile({ email: currentUser.email, notificationsEnabled: enabled });
+      try {
+        await handleUpdateProfile({ email: currentUser.email, notificationsEnabled: enabled });
+      } catch (err: any) {
+        displayToast({
+          id: `err-${Date.now()}`,
+          title: 'Error',
+          message: err.message || 'Failed to save notification preference',
+          type: 'admin_alert',
+          timestamp: new Date().toISOString(),
+          read: false
+        }, 5000);
+      }
     }
   };
 
-const handleAppointAdmin = async (email: string, name: string, role: 'super_admin' | 'sub_admin' | 'news_reporter' | 'official_league' | 'OFFICIAL_LEAGUE') => {
-    await api.appointAdmin({
-      email,
-      name,
-      role,
-      appointedBy: currentUser?.email || 'itzjeda10@gmail.com'
-    });
-    await loadData();
+  const handleAppointAdmin = async (email: string, name: string, role: 'super_admin' | 'sub_admin' | 'news_reporter' | 'official_league' | 'OFFICIAL_LEAGUE') => {
+    try {
+      await api.appointAdmin({
+        email,
+        name,
+        role,
+        appointedBy: currentUser?.email || 'itzjeda10@gmail.com'
+      });
+      await loadData();
+    } catch (err: any) {
+      console.error('Appoint admin failed:', err);
+      throw new Error(err.message || 'Failed to appoint admin');
+    }
   };
 
   const handleDismissAdmin = async (email: string) => {
-    await api.dismissAdmin(email);
-    await loadData();
+    try {
+      await api.dismissAdmin(email);
+      await loadData();
+    } catch (err: any) {
+      console.error('Dismiss admin failed:', err);
+      throw new Error(err.message || 'Failed to dismiss admin');
+    }
   };
 
   const handleUpdateSettings = async (newSettings: Partial<AppSettings>) => {
-    const updated = await api.saveSettings(newSettings);
-    setSettings(updated);
-    await loadData();
+    try {
+      const updated = await api.saveSettings(newSettings);
+      setSettings(updated);
+      await loadData();
+      return updated;
+    } catch (err: any) {
+      console.error('Update settings failed:', err);
+      throw new Error(err.message || 'Failed to update settings');
+    }
   };
 
-  const liveMatches = matches.filter(m => m.status === 'Live');
+  const liveMatches = matches.filter(m => m && m.status === 'Live');
   const isDark = theme === 'dark';
 
   // GATE 1: MANDATORY APP SIGN UP / LOGIN GATE (To access the app & create profile)
@@ -579,10 +741,7 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
           onToggleTheme={handleToggleTheme}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
-          onOpenAuthDeck={() => {
-            setIsAuthDeckOpen(true);
-            window.dispatchEvent(new Event('reset-profile-tab'));
-          }}
+          onOpenAuthDeck={() => openAuthDeck()}
           settings={settings}
         />
 
@@ -619,11 +778,22 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
               {/* TAB 1: MATCHES & LIVE DASHBOARD */}
               {activeTab === 'matches' && (
                 <div className="space-y-8">
+                  {/* Premium Sponsorship Banner */}
+                  <SponsorshipBanner logoUrl={settings?.sponsor_logo_url || settings?.sponsorLogoUrl} tagline="Official Match Day & Live Scores Partner" />
+
                   {/* Today's Matches Strip */}
                   <TodayMatchesStrip
                     matches={matches}
                     onSelectMatch={(m) => setSelectedMatch(m)}
                     selectedMatchId={selectedMatch?.id}
+                  />
+
+                  {/* Matchday Score Predictor */}
+                  <MatchdayPredictor
+                    matches={matches}
+                    currentUser={currentUser}
+                    onShowToast={triggerToast}
+                    onOpenAuthDeck={() => openAuthDeck()}
                   />
                 </div>
               )}
@@ -637,6 +807,16 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
                     onSelectTeam={setSelectedTeamProfile} 
                     isAdmin={currentUser?.role === 'admin' || currentUser?.role === 'super_admin'}
                   />
+
+                  {/* Official Matchday Predictor & Leaderboard */}
+                  <MatchdayPredictor
+                    matches={matches}
+                    currentUser={currentUser}
+                    onShowToast={triggerToast}
+                    onOpenAuthDeck={() => openAuthDeck()}
+                    defaultTab="leaderboard"
+                  />
+
                   <LeagueStats stats={stats} teams={teams} competition="league" players={players} />
                 </div>
               )}
@@ -711,8 +891,6 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
 
       {/* User & Admin Login Deck Modal */}
       <UserAuthDeckModal
-        isOpen={isAuthDeckOpen}
-        onClose={() => setIsAuthDeckOpen(false)}
         currentUser={currentUser}
         teams={teams}
         admins={admins}
@@ -731,43 +909,25 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
       />
 
       {/* Team Profile Modal Popup */}
-      {selectedTeamProfile && (
-        <TeamProfileModal
-          team={selectedTeamProfile}
-          standings={standings}
-          players={players}
-          matches={matches}
-          users={users}
-          onClose={() => setSelectedTeamProfile(null)}
-        />
-      )}
+      <TeamProfileModal teams={teams} standings={standings} players={players} matches={matches} users={users} />
 
       {/* Match Detail Modal Popup */}
-      {selectedMatch && (
-        <MatchDetailModal
-          match={selectedMatch}
-          players={players}
-          teams={teams}
-          isAdmin={isAdmin}
-          currentUser={currentUser}
-          onClose={() => setSelectedMatch(null)}
-        />
-      )}
+      <MatchDetailModal matches={matches} players={players} teams={teams} isAdmin={isAdmin} currentUser={currentUser} />
 
       {/* Bottom Navigation Bar */}
-      {activeTab !== 'admin' && activeTab !== 'fantasy' && !isAuthDeckOpen && (
-      <div className="fixed bottom-0 left-0 right-0 z-40 bg-[#800020] border-t border-[#5a0016] shadow-[0_-10px_30px_-10px_rgba(128,0,32,0.4)] pb-safe">
+      {activeTab !== 'admin' && activeTab !== 'fantasy' && (
+      <div className="fixed bottom-0 left-0 right-0 z-40 bg-[#800020] border-t border-[#881337]/50 shadow-[0_-10px_30px_-10px_rgba(128,0,32,0.6)] pb-safe">
         <div className="flex items-center justify-around max-w-lg mx-auto py-2 px-2 relative">
           <button
-            onClick={() => setActiveTab('matches')}
-            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'matches' ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+            onClick={() => handleTabChange('matches')}
+            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'matches' ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
           >
             <Radio className={`transition-all ${activeTab === 'matches' ? 'w-6 h-6' : 'w-5 h-5'}`} />
             <span className={`font-bold tracking-wide transition-all ${activeTab === 'matches' ? 'text-[11px]' : 'text-[10px]'}`}>Matches</span>
           </button>
           <button
-            onClick={() => setActiveTab('standings')}
-            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'standings' ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+            onClick={() => handleTabChange('standings')}
+            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'standings' ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
           >
             <Goal className={`transition-all ${activeTab === 'standings' ? 'w-6 h-6' : 'w-5 h-5'}`} />
             <span className={`font-bold tracking-wide transition-all ${activeTab === 'standings' ? 'text-[11px]' : 'text-[10px]'}`}>League</span>
@@ -776,19 +936,19 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
           {/* Prominent Center Hero Button (For You) */}
           <div className="relative min-w-[72px] flex items-center justify-center z-50">
             <button
-              onClick={() => setActiveTab('news')}
+              onClick={() => handleTabChange('news')}
               className="flex flex-col items-center justify-center min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer group transition-all duration-300"
             >
               {/* Invisible spacer matching other icons' height to keep text perfectly aligned */}
               <div className="w-5 h-6 opacity-0 mb-2"></div>
-              <span className={`font-bold tracking-wide transition-all ${activeTab === 'news' ? 'text-amber-400 text-[11px]' : 'text-white/70 group-hover:text-white text-[10px]'}`}>For You</span>
+              <span className={`font-bold tracking-wide transition-all ${activeTab === 'news' ? 'text-[#FFE3B3] text-[11px]' : 'text-white/80 group-hover:text-white text-[10px]'}`}>For You</span>
             </button>
             
             {/* The Center Button */}
             <div className="absolute top-[-28px] left-1/2 -translate-x-1/2 pointer-events-none">
               <button 
-                onClick={() => setActiveTab('news')} 
-                className={`pointer-events-auto flex items-center justify-center w-[62px] h-[62px] rounded-full transition-all duration-300 ${activeTab === 'news' ? 'bg-amber-400 text-[#800020] scale-110 shadow-[0_4px_15px_rgba(251,191,36,0.4)]' : 'bg-white text-slate-800 hover:text-[#800020]'}`}
+                onClick={() => handleTabChange('news')} 
+                className={`pointer-events-auto flex items-center justify-center w-[62px] h-[62px] rounded-full transition-all duration-300 ${activeTab === 'news' ? 'bg-[#FBB931] text-[#800020] scale-110 shadow-[0_4px_18px_rgba(251,185,49,0.5)] border-2 border-white' : 'bg-white text-slate-800 hover:text-[#800020]'}`}
               >
                 <Newspaper className={`transition-all ${activeTab === 'news' ? 'w-6 h-6' : 'w-5 h-5'}`} />
               </button>
@@ -796,15 +956,15 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
           </div>
 
           <button
-            onClick={() => setActiveTab('cup')}
-            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'cup' ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+            onClick={() => handleTabChange('cup')}
+            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'cup' ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
           >
             <Trophy className={`transition-all ${activeTab === 'cup' ? 'w-6 h-6' : 'w-5 h-5'}`} />
             <span className={`font-bold tracking-wide transition-all ${activeTab === 'cup' ? 'text-[11px]' : 'text-[10px]'}`}>Cup</span>
           </button>
           <button
-            onClick={() => setActiveTab('fantasy')}
-            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'fantasy' ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+            onClick={() => handleTabChange('fantasy')}
+            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activeTab === 'fantasy' ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
           >
             <Sparkles className={`transition-all ${activeTab === 'fantasy' ? 'w-6 h-6' : 'w-5 h-5'}`} />
             <span className={`font-bold tracking-wide transition-all ${activeTab === 'fantasy' ? 'text-[11px]' : 'text-[10px]'}`}>Fantasy</span>
@@ -833,6 +993,9 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
         </div>
       </footer>
 
+      {/* Player Profile Modal Popup (Global) */}
+      <PlayerProfileModal players={players} teams={teams} matches={matches} />
+
       {/* Offline Alert Modal */}
       {showOfflineModal && !isOnline && (
         <div className="fixed inset-0 z-[10001] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
@@ -857,7 +1020,7 @@ const handleAppointAdmin = async (email: string, name: string, role: 'super_admi
                   setShowOfflineModal(true);
                 }
               }}
-              className="w-full py-3.5 px-4 rounded-xl bg-[#800020] hover:bg-rose-900 text-white font-bold text-sm shadow-lg hover:shadow-rose-900/30 transition-all cursor-pointer border border-rose-700/50 flex items-center justify-center gap-2"
+              className="w-full py-3.5 px-4 rounded-xl bg-[#800020] hover:bg-[#58061e] text-white font-bold text-sm shadow-lg hover:shadow-rose-950/30 transition-all cursor-pointer border border-rose-900/50 flex items-center justify-center gap-2"
             >
               <RefreshCw className="w-4 h-4" />
               <span>Retry Connection</span>

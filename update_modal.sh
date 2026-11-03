@@ -1,0 +1,1 @@
+sed -i 's/export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({ player, team, onClose }) => {/export const PlayerProfileModal: React.FC<PlayerProfileModalProps> = ({ player, team, onClose, matchContext }) => {/g' src/components/PlayerProfileModal.tsx

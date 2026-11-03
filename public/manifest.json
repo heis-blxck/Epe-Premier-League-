@@ -5,21 +5,32 @@
   "scope": "/",
   "id": "/",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#800020",
-  "theme_color": "#800020",
+  "background_color": "#000000",
+  "theme_color": "#EA6113",
   "icons": [
     {
-      "src": "/app-icon.jpg",
+      "src": "https://i.postimg.cc/W1fLTy5q/Epe-Premier-League-App-Icon-(192-x-192-px)-20260728-072641-0000.png",
       "sizes": "192x192",
-      "type": "image/jpeg",
-      "purpose": "any maskable"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "/app-icon.jpg",
+      "src": "https://i.postimg.cc/W1fLTy5q/Epe-Premier-League-App-Icon-(192-x-192-px)-20260728-072641-0000.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "https://i.postimg.cc/Hxwhcv9R/Epe-Premier-League-App-Icon-20260728-072805-0000.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
-      "purpose": "any maskable"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "https://i.postimg.cc/Hxwhcv9R/Epe-Premier-League-App-Icon-20260728-072805-0000.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

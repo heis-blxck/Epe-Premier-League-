@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
+import { useURLModal } from "../hooks/useURLModal";
 import { MatchVideo } from "../types";
 import { api } from "../services/api";
 import { Play, ArrowLeft, ThumbsUp } from "lucide-react";
-import { useBackHandler } from "../utils/backManager";
+
 import { VerifiedBadge } from "./VerifiedBadge";
 
 interface VideoHighlightsHubProps {
@@ -50,15 +51,10 @@ export const VideoHighlightsHub: React.FC<VideoHighlightsHubProps> = ({
   };
 
   const [videos, setVideos] = useState<MatchVideo[]>(initialVideos || []);
-  const [activeVideo, setActiveVideo] = useState<MatchVideo | null>(null);
+  const { isOpen: isVideoModalOpen, openModal: openVideoModal, closeModal: closeVideoModal, modalData: videoModalData } = useURLModal<{ videoId: string }>('videoPlayer');
+  const activeVideo = isVideoModalOpen && videoModalData?.videoId ? videos.find(v => v.id === videoModalData.videoId) : null;
 
-  useBackHandler(() => {
-    if (activeVideo) {
-      setActiveVideo(null);
-      return true;
-    }
-    return false;
-  }, [activeVideo]);
+  
 
   const fetchVideos = async () => {
     if (initialVideos) return;
@@ -107,7 +103,7 @@ export const VideoHighlightsHub: React.FC<VideoHighlightsHubProps> = ({
             return (
               <div
                 key={video.id}
-                onClick={() => setActiveVideo(video)}
+                onClick={() => openVideoModal({ videoId: video.id })}
                 className="w-[280px] h-[340px] rounded-xl overflow-hidden shrink-0 snap-start cursor-pointer group relative bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all shadow-lg"
               >
                 <img
@@ -159,7 +155,7 @@ export const VideoHighlightsHub: React.FC<VideoHighlightsHubProps> = ({
           <div className="p-4 flex items-center justify-between bg-slate-950 border-b border-slate-800">
             <div className="flex items-center gap-4">
               <button
-                onClick={() => setActiveVideo(null)}
+                onClick={() => closeVideoModal()}
                 className="w-10 h-10 rounded-full bg-slate-900 hover:bg-amber-400 text-white hover:text-slate-950 transition-colors flex items-center justify-center cursor-pointer"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -193,7 +189,7 @@ export const VideoHighlightsHub: React.FC<VideoHighlightsHubProps> = ({
               return (
                 <div
                   key={video.id}
-                  onClick={() => !isPlaying && setActiveVideo(video)}
+                  onClick={() => !isPlaying && openVideoModal({ videoId: video.id })}
                   className={`flex gap-3 items-center cursor-pointer group ${isPlaying ? "" : "hover:bg-slate-900"} p-2 rounded-xl transition-colors relative`}
                 >
                   <div className="w-32 aspect-video rounded-lg overflow-hidden relative shrink-0">

@@ -25,6 +25,7 @@ export function PotmManager({ players = [], teams = [] }: PotmManagerProps) {
   const [potmList, setPotmList] = useState<PlayerOfTheMonth[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     loadPotm();
@@ -65,6 +66,7 @@ export function PotmManager({ players = [], teams = [] }: PotmManagerProps) {
   const handleSave = async () => {
     if (!graphicUrl || !month || !playerName) return;
     setLoading(true);
+    setErrorMsg(null);
     try {
       await api.savePlayerOfTheMonth({
         id: 'potm-' + Date.now(),
@@ -88,9 +90,9 @@ export function PotmManager({ players = [], teams = [] }: PotmManagerProps) {
       setGraphicUrl('');
       setMonth('');
       loadPotm();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert('Failed to save POTM');
+      setErrorMsg(e.message || 'Failed to save POTM');
     } finally {
       setLoading(false);
     }
@@ -98,12 +100,13 @@ export function PotmManager({ players = [], teams = [] }: PotmManagerProps) {
 
   const handleDelete = async (id: string) => {
     // Note: window.confirm is blocked in the preview iframe, proceeding directly
+    setErrorMsg(null);
     try {
       await api.deletePlayerOfTheMonth(id);
       loadPotm();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      // Removed alert as well
+      setErrorMsg(e.message || 'Failed to delete POTM');
     }
   };
 
@@ -207,7 +210,7 @@ export function PotmManager({ players = [], teams = [] }: PotmManagerProps) {
             <button
               onClick={handleSave}
               disabled={loading || !playerName || !graphicUrl || !month}
-              className="w-full bg-[#800020] hover:bg-[#5a0016] text-white font-black py-3 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 mt-4 cursor-pointer"
+              className="w-full bg-[#800020] hover:bg-[#9a3412] text-white font-black py-3 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 mt-4 cursor-pointer"
             >
               <Save className="w-5 h-5" />
               {loading ? 'Publishing...' : 'Publish Player of the Month'}
@@ -217,6 +220,15 @@ export function PotmManager({ players = [], teams = [] }: PotmManagerProps) {
               <div className="p-3 bg-emerald-900/50 border border-emerald-500/50 rounded-xl text-emerald-300 text-sm font-bold flex items-center gap-2 mt-2">
                 <CheckCircle className="w-5 h-5" />
                 Player of the Month Award Published!
+              </div>
+            )}
+
+            {errorMsg && (
+              <div className="p-3 bg-rose-900/50 border border-rose-500/50 rounded-xl text-rose-300 text-sm font-bold flex items-center justify-between gap-2 mt-2">
+                <span>{errorMsg}</span>
+                <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-200 hover:text-white cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
             )}
           </div>

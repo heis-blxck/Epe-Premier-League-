@@ -1,5 +1,77 @@
 import { Match, MatchEvent, Player, FantasySquad, MatchLineup } from '../types';
 
+export interface FantasyInputStats {
+  minutesPlayed?: number;
+  goals?: number;
+  assists?: number;
+  cleanSheets?: number;
+  yellowCards?: number;
+  redCards?: number;
+  penaltyMisses?: number;
+  goalsConceded?: number;
+  penaltySaves?: number;
+  bonusPoints?: number;
+  ownGoals?: number;
+}
+
+export function calculateFantasyPoints(
+  player: { position: string },
+  stats: FantasyInputStats
+): number {
+  let points = 0;
+
+  const minutesPlayed = stats.minutesPlayed || 0;
+  const goals = stats.goals || 0;
+  const assists = stats.assists || 0;
+  const cleanSheets = stats.cleanSheets || 0;
+  const yellowCards = stats.yellowCards || 0;
+  const redCards = stats.redCards || 0;
+  const penaltyMisses = stats.penaltyMisses || 0;
+  const goalsConceded = stats.goalsConceded || 0;
+  const penaltySaves = stats.penaltySaves || 0;
+  const bonusPoints = stats.bonusPoints || 0;
+  const ownGoals = stats.ownGoals || 0;
+
+  // 1. General Points (Applies to ALL positions)
+  // Appearance points: minutesPlayed > 0 and < 60 = +1pt; minutesPlayed >= 60 = +2pt
+  if (minutesPlayed >= 60) {
+    points += 2;
+  } else if (minutesPlayed > 0) {
+    points += 1;
+  }
+
+  points += assists * 3;
+  points -= yellowCards * 1;
+  points -= redCards * 3;
+  points -= penaltyMisses * 2;
+  points -= ownGoals * 2;
+  points += bonusPoints;
+
+  // 2. Positional Points
+  const pos = (player?.position || '').toUpperCase();
+
+  if (pos === 'FWD' || pos === 'ST' || pos === 'ATT') {
+    points += goals * 4;
+  } else if (pos === 'MID') {
+    points += goals * 5;
+    points += cleanSheets * 1;
+  } else if (pos === 'DEF') {
+    points += goals * 6;
+    points += cleanSheets * 4;
+    points += Math.floor(goalsConceded / 2) * -1;
+  } else if (pos === 'GK') {
+    points += goals * 6;
+    points += cleanSheets * 4;
+    points += Math.floor(goalsConceded / 2) * -1;
+    points += penaltySaves * 3;
+  } else {
+    // Fallback if position unknown
+    points += goals * 4;
+  }
+
+  return points;
+}
+
 export interface PlayerFantasyStats {
   minutesPlayed: number;
   goals: number;
@@ -52,14 +124,16 @@ export function calculatePlayerLivePoints(
       if (e.playerId === playerId) subOutMinute = e.minute;
     }
     if (e.playerId === playerId) {
-      if (e.eventType === 'Goal') {
-        if (e.goalType === 'own_goal') stats.ownGoals += 1;
+      const typeStr = e.eventType as string;
+      if (typeStr === 'Goal' || typeStr === 'Penalty Goal' || typeStr === 'penalty' || typeStr === 'Own Goal' || typeStr === 'own_goal') {
+        if (e.goalType === 'own_goal' || typeStr === 'Own Goal' || typeStr === 'own_goal') stats.ownGoals += 1;
         else stats.goals += 1;
       }
-      if (e.eventType === 'Yellow Card') stats.yellowCards += 1;
-      if (e.eventType === 'Red Card') stats.redCards += 1;
+      if (typeStr === 'Yellow Card') stats.yellowCards += 1;
+      if (typeStr === 'Red Card') stats.redCards += 1;
     }
-    if (e.assisterId === playerId && e.eventType === 'Goal' && e.goalType !== 'own_goal') {
+    const isAssister = e.assisterId === playerId || (e as any).assistPlayerId === playerId;
+    if (isAssister && (e.eventType === 'Goal' || (e.eventType as string) === 'Penalty Goal') && e.goalType !== 'own_goal') {
       stats.assists += 1;
     }
   });
@@ -120,27 +194,18 @@ export function calculatePlayerLivePoints(
     stats.cleanSheet = true;
   }
 
-  // Calculate points
-  let points = 0;
-  
-  if (stats.minutesPlayed > 0) points += 1; // Kickoff
-  if (stats.minutesPlayed >= 60) points += 1; // 60+ mins
-
-  if (playerPos === 'GK' || playerPos === 'DEF') {
-    points += stats.goals * 6;
-    if (stats.cleanSheet) points += 4;
-  } else if (playerPos === 'MID') {
-    points += stats.goals * 5;
-    if (stats.cleanSheet) points += 1; // Typically mids get 1 for CS in FPL
-  } else if (playerPos === 'FWD' || playerPos === 'ST' || playerPos === 'ATT') {
-    points += stats.goals * 4;
-  }
-
-  points += stats.assists * 3;
-  points -= stats.yellowCards * 1;
-  points -= stats.redCards * 3;
-  points -= stats.ownGoals * 2;
-  points += stats.bonusPoints;
+  // Calculate points using central calculation utility
+  let points = calculateFantasyPoints(player, {
+    minutesPlayed: stats.minutesPlayed,
+    goals: stats.goals,
+    assists: stats.assists,
+    cleanSheets: stats.cleanSheet ? 1 : 0,
+    yellowCards: stats.yellowCards,
+    redCards: stats.redCards,
+    goalsConceded: opponentScore,
+    bonusPoints: stats.bonusPoints,
+    ownGoals: stats.ownGoals
+  });
 
   let multiplier = 1;
   if (isCaptain) {

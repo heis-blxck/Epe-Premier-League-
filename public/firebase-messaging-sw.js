@@ -116,7 +116,7 @@ fetch('/api/firebase-config')
         data: payload.data,
       };
 
-      self.registration.showNotification(notificationTitle, notificationOptions);
+      return self.registration.showNotification(notificationTitle, notificationOptions);
     });
   })
   .catch(err => {

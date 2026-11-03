@@ -44,15 +44,18 @@ export function computeLiveGhostStandings(
   const activeLiveMatches = matches.filter(m => {
     const isLeague = m.competition_type !== 'Cup';
     const statusStr = (m.status || '') as string;
-    const isLive = statusStr === 'Live' || 
+    const isLiveOrRecentlyFinished = statusStr === 'Live' || 
                    statusStr === 'FIRST_HALF' || 
                    statusStr === 'SECOND_HALF' || 
                    statusStr === 'Half-Time' ||
+                   statusStr === 'Full-Time' ||
+                   statusStr === 'Penalties' ||
                    m.period === '1st Half' || 
                    m.period === '2nd Half' || 
-                   m.period === 'Half-Time';
-    const isNotFinished = statusStr !== 'Full-Time' && statusStr !== 'Penalties' && m.period !== 'Full-Time';
-    return isLeague && isLive && isNotFinished;
+                   m.period === 'Half-Time' ||
+                   m.period === 'Full-Time';
+    const isNotCommitted = !m.isStatsCommitted;
+    return isLeague && isLiveOrRecentlyFinished && isNotCommitted;
   });
 
   const hasActiveLiveMatches = activeLiveMatches.length > 0;

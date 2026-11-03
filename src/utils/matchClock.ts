@@ -26,6 +26,26 @@ export function parseTimestampMillis(val: any): number | null {
   return null;
 }
 
+export function getMatchKickoffTimestamp(match: Match): number {
+  if (match.kickoffTime) {
+    const parsed = parseTimestampMillis(match.kickoffTime);
+    if (parsed !== null && !isNaN(parsed)) return parsed;
+  }
+  if (match.date) {
+    if (match.date.includes('T')) {
+      const parsed = Date.parse(match.date);
+      if (!isNaN(parsed)) return parsed;
+    }
+    const dateStr = match.date.split('T')[0];
+    const timeStr = match.time ? match.time : '00:00';
+    const parsed = Date.parse(`${dateStr}T${timeStr}:00`);
+    if (!isNaN(parsed)) return parsed;
+    const parsedJustDate = Date.parse(dateStr);
+    if (!isNaN(parsedJustDate)) return parsedJustDate;
+  }
+  return 0;
+}
+
 export function calculateMatchClock(match: Match | null | undefined, nowMillis: number = Date.now()): MatchClockResult {
   if (!match) {
     return {

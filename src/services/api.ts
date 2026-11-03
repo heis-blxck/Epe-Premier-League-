@@ -1,4 +1,9 @@
-import { Team, Player, Match, MatchEvent, NewsArticle, LeagueStats, AdminUser, UserAccount, AppNotification, AppSettings, MatchStats, FantasySquad, MiniLeague, MatchPredictionStats, PredictionType, MatchLineup, Advertisement, FixtureChatMessage } from '../types';
+import { Team, Player, Match, MatchEvent, NewsArticle, LeagueStats, AdminUser, UserAccount, AppNotification, AppSettings, MatchStats, FantasySquad, MiniLeague, MatchPredictionStats, PredictionType, MatchLineup, Advertisement, FixtureChatMessage, PredictorLeaderboardEntry, ScorePredictionRecord } from '../types';
+
+async function throwApiError(res: Response, fallbackMsg: string): Promise<never> {
+  const errData = await res.json().catch(() => ({}));
+  throw new Error(errData.error || fallbackMsg);
+}
 
 export const api = {
   // App Settings
@@ -16,7 +21,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(chips),
     });
-    if (!res.ok) throw new Error('Failed to save manager chips');
+    if (!res.ok) await throwApiError(res, 'Failed to save manager chips');
     return res.json();
   },
 
@@ -32,7 +37,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(potm),
     });
-    if (!res.ok) throw new Error('Failed to save POTW');
+    if (!res.ok) await throwApiError(res, 'Failed to save POTW');
     return res.json();
   },
 
@@ -40,7 +45,7 @@ export const api = {
     const res = await fetch(`/api/player-of-the-week/${id}`, {
       method: 'DELETE',
     });
-    if (!res.ok) throw new Error('Failed to delete POTW');
+    if (!res.ok) await throwApiError(res, 'Failed to delete POTW');
     return res.json();
   },
 
@@ -63,13 +68,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(ad)
     });
-    if (!res.ok) throw new Error('Failed to save advertisement');
+    if (!res.ok) await throwApiError(res, 'Failed to save advertisement');
     return res.json();
   },
 
   async deleteAdvertisement(id: string): Promise<void> {
     const res = await fetch(`/api/advertisements/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete advertisement');
+    if (!res.ok) await throwApiError(res, 'Failed to delete advertisement');
   },
 
   async saveSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
@@ -78,7 +83,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings)
     });
-    if (!res.ok) throw new Error('Failed to save settings');
+    if (!res.ok) await throwApiError(res, 'Failed to save settings');
     return res.json();
   },
 
@@ -97,24 +102,31 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(team)
     });
-    if (!res.ok) throw new Error('Failed to save team');
+    if (!res.ok) await throwApiError(res, 'Failed to save team');
     return res.json();
   },
 
   async deleteTeam(id: string): Promise<void> {
     const res = await fetch(`/api/teams/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete team');
+    if (!res.ok) await throwApiError(res, 'Failed to delete team');
   },
 
   // Players
   async getPlayers(teamId?: string): Promise<Player[]> {
-    const url = teamId ? `/api/players?teamId=${teamId}` : '/api/players';
-    const res = await fetch(url);
+    const res = await fetch(teamId ? `/api/players?teamId=${teamId}` : '/api/players');
     if (!res.ok) throw new Error('Failed to fetch players');
     return res.json();
   },
 
+  async getFantasyDashboardStats(): Promise<any> {
+    const res = await fetch('/api/fantasy-dashboard-stats');
+    if (!res.ok) throw new Error('Failed to fetch stats');
+    return res.json();
+  },
+
   async savePlayer(player: Partial<Player>): Promise<Player> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
     const method = player.id ? 'PUT' : 'POST';
     const url = player.id ? `/api/players/${player.id}` : '/api/players';
     const res = await fetch(url, {
@@ -122,31 +134,37 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(player)
     });
-    if (!res.ok) throw new Error('Failed to save player');
+    if (!res.ok) await throwApiError(res, 'Failed to save player');
     return res.json();
   },
 
   async deletePlayer(id: string): Promise<void> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
     const res = await fetch(`/api/players/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete player');
+    if (!res.ok) await throwApiError(res, 'Failed to delete player');
   },
 
   async deletePlayersBulk(ids: string[]): Promise<void> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
     const res = await fetch('/api/players/bulk-delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids })
     });
-    if (!res.ok) throw new Error('Failed to bulk delete players');
+    if (!res.ok) await throwApiError(res, 'Failed to bulk delete players');
   },
 
   async transferPlayer(id: string, newTeamId: string, newShirtNumber?: number): Promise<Player> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
     const res = await fetch(`/api/players/${id}/transfer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ newTeamId, newShirtNumber })
     });
-    if (!res.ok) throw new Error('Failed to transfer player');
+    if (!res.ok) await throwApiError(res, 'Failed to transfer player');
     return res.json();
   },
 
@@ -171,7 +189,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(match)
     });
-    if (!res.ok) throw new Error('Failed to save match');
+    if (!res.ok) await throwApiError(res, 'Failed to save match');
     return res.json();
   },
 
@@ -181,7 +199,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ matches })
     });
-    if (!res.ok) throw new Error('Failed to bulk upload matches');
+    if (!res.ok) await throwApiError(res, 'Failed to bulk upload matches');
     return res.json();
   },
 
@@ -189,7 +207,7 @@ export const api = {
     const res = await fetch(`/api/matches/${id}`, {
       method: 'DELETE'
     });
-    if (!res.ok) throw new Error('Failed to delete match');
+    if (!res.ok) await throwApiError(res, 'Failed to delete match');
   },
 
   // Events
@@ -199,7 +217,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(eventData)
     });
-    if (!res.ok) throw new Error('Failed to add event');
+    if (!res.ok) await throwApiError(res, 'Failed to add event');
     return res.json();
   },
 
@@ -207,7 +225,7 @@ export const api = {
     const res = await fetch(`/api/matches/${matchId}/events/${eventId}`, {
       method: 'DELETE'
     });
-    if (!res.ok) throw new Error('Failed to delete event');
+    if (!res.ok) await throwApiError(res, 'Failed to delete event');
   },
 
   // Ratings
@@ -217,7 +235,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ratings })
     });
-    if (!res.ok) throw new Error('Failed to save ratings');
+    if (!res.ok) await throwApiError(res, 'Failed to save ratings');
     return res.json();
   },
 
@@ -228,7 +246,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ isHome, lineup })
     });
-    if (!res.ok) throw new Error('Failed to save lineup');
+    if (!res.ok) await throwApiError(res, 'Failed to save lineup');
     return res.json();
   },
 
@@ -245,7 +263,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(overrideData)
     });
-    if (!res.ok) throw new Error('Failed to update team standings override');
+    if (!res.ok) await throwApiError(res, 'Failed to update team standings override');
     return res.json();
   },
 
@@ -262,19 +280,22 @@ export const api = {
     return res.json();
   },
 
-  async saveNews(article: Partial<NewsArticle>): Promise<NewsArticle> {
+  async saveNews(article: Partial<NewsArticle> & { currentUserUid?: string; currentUserRole?: string; currentUserEmail?: string; isSuperAdminAction?: boolean }): Promise<NewsArticle> {
     const res = await fetch('/api/news', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(article)
     });
-    if (!res.ok) throw new Error('Failed to publish news');
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to publish news');
+    }
     return res.json();
   },
 
   async likeNews(id: string): Promise<NewsArticle> {
     const res = await fetch(`/api/news/${id}/like`, { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to like article');
+    if (!res.ok) await throwApiError(res, 'Failed to like article');
     return res.json();
   },
 
@@ -284,13 +305,25 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(comment)
     });
-    if (!res.ok) throw new Error('Failed to post comment');
+    if (!res.ok) await throwApiError(res, 'Failed to post comment');
     return res.json();
   },
 
-  async deleteNews(id: string): Promise<void> {
-    const res = await fetch(`/api/news/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete news');
+  async deleteNews(id: string, userContext?: { uid?: string; role?: string; email?: string }): Promise<void> {
+    const query = userContext ? `?uid=${encodeURIComponent(userContext.uid || '')}&role=${encodeURIComponent(userContext.role || '')}&email=${encodeURIComponent(userContext.email || '')}` : '';
+    const res = await fetch(`/api/news/${id}${query}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(userContext?.uid ? { 'x-user-uid': userContext.uid } : {}),
+        ...(userContext?.role ? { 'x-user-role': userContext.role } : {}),
+        ...(userContext?.email ? { 'x-user-email': userContext.email } : {})
+      }
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to delete news');
+    }
   },
 
   // Admins & Role Management
@@ -389,37 +422,52 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(notif)
     });
-    if (!res.ok) throw new Error('Failed to create notification');
+    if (!res.ok) await throwApiError(res, 'Failed to create notification');
     return res.json();
   },
 
   async markNotificationRead(id: string): Promise<void> {
-    await fetch('/api/notifications/read', {
+    const res = await fetch('/api/notifications/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id })
     });
+    if (!res.ok) await throwApiError(res, 'Failed to mark notification read');
   },
 
   async markAllNotificationsRead(): Promise<void> {
-    await fetch('/api/notifications/read-all', {
+    const res = await fetch('/api/notifications/read-all', {
       method: 'POST'
     });
+    if (!res.ok) await throwApiError(res, 'Failed to mark all notifications read');
   },
 
   async clearNotifications(): Promise<void> {
-    await fetch('/api/notifications', { method: 'DELETE' });
+    const res = await fetch('/api/notifications', { method: 'DELETE' });
+    if (!res.ok) await throwApiError(res, 'Failed to clear notifications');
   },
 
   // Reset
   async resetDemo(): Promise<void> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
     const res = await fetch('/api/reset-demo', { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to reset demo');
+    if (!res.ok) await throwApiError(res, 'Failed to reset demo');
   },
 
   async resetTableZero(): Promise<void> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
     const res = await fetch('/api/reset-table-zero', { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to reset table data');
+    if (!res.ok) await throwApiError(res, 'Failed to reset table data');
+  },
+
+  async emergencyReseed(): Promise<any> {
+    localStorage.removeItem('cached_players');
+    localStorage.removeItem('player_version');
+    const res = await fetch('/api/emergency-reseed', { method: 'POST' });
+    if (!res.ok) await throwApiError(res, 'Failed to run emergency re-seed');
+    return res.json();
   },
 
   // Fantasy League & Mini-Leagues
@@ -440,6 +488,18 @@ export const api = {
       throw new Error(err.error || 'Failed to save fantasy squad');
     }
     return res.json();
+  },
+
+  async resetMySquad(squadId: string, userId: string): Promise<void> {
+    const res = await fetch('/api/fantasy/reset-my-squad', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ squadId, userId })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete fantasy squad');
+    }
   },
 
   async getMiniLeagues(): Promise<MiniLeague[]> {
@@ -513,6 +573,31 @@ export const api = {
     return res.json();
   },
 
+  async getScorePredictions(userId: string): Promise<ScorePredictionRecord[]> {
+    const res = await fetch(`/api/score-predictions?userId=${encodeURIComponent(userId || '')}`);
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  async getPredictorLeaderboard(): Promise<PredictorLeaderboardEntry[]> {
+    const res = await fetch('/api/predictions/leaderboard');
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  async saveScorePrediction(data: { userId: string; matchId: string; homeScore: number; awayScore: number; userEmail?: string; userName?: string }): Promise<ScorePredictionRecord> {
+    const res = await fetch('/api/score-predictions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to save score prediction');
+    }
+    return res.json();
+  },
+
   // Player Valuation
   async updatePlayerValuation(playerId: string, price: number, isSuspended?: boolean, isInjured?: boolean, injuryStatus?: 'Fit' | 'Injured' | 'Doubtful', suspensionWeeks?: number): Promise<Player> {
     const res = await fetch(`/api/players/${playerId}/valuation`, {
@@ -567,6 +652,17 @@ export const api = {
     return res.json();
   },
 
+  async forceFirestoreSync(): Promise<{ success: boolean; message: string }> {
+    const res = await fetch('/api/admin/force-firestore-sync', {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to force Firestore sync');
+    }
+    return res.json();
+  },
+
   async bulkUploadLineups(matchId: string, text: string): Promise<{ importedCount: number }> {
     const res = await fetch('/api/admin/bulk-lineups', {
       method: 'POST',
@@ -598,7 +694,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg)
     });
-    if (!res.ok) throw new Error('Failed to post chat message');
+    if (!res.ok) await throwApiError(res, 'Failed to post chat message');
     return res.json();
   },
 
@@ -606,7 +702,7 @@ export const api = {
     const res = await fetch(`/api/matches/${matchId}/chats/${chatId}`, {
       method: 'DELETE'
     });
-    if (!res.ok) throw new Error('Failed to delete chat message');
+    if (!res.ok) await throwApiError(res, 'Failed to delete chat message');
     const data = await res.json();
     return data.success;
   },
@@ -649,7 +745,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(video)
     });
-    if (!res.ok) throw new Error('Failed to save match video');
+    if (!res.ok) await throwApiError(res, 'Failed to save match video');
     return res.json();
   },
 
@@ -657,7 +753,7 @@ export const api = {
     const res = await fetch(`/api/match-videos/${id}`, {
       method: 'DELETE'
     });
-    if (!res.ok) throw new Error('Failed to delete match video');
+    if (!res.ok) await throwApiError(res, 'Failed to delete match video');
     const data = await res.json();
     return data.success;
   },
@@ -674,7 +770,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(highlight)
     });
-    if (!res.ok) throw new Error('Failed to save epl highlight');
+    if (!res.ok) await throwApiError(res, 'Failed to save epl highlight');
     return res.json();
   },
 
@@ -682,7 +778,7 @@ export const api = {
     const res = await fetch(`/api/epl-highlights/${id}`, {
       method: 'DELETE'
     });
-    if (!res.ok) throw new Error('Failed to delete epl highlight');
+    if (!res.ok) await throwApiError(res, 'Failed to delete epl highlight');
     const data = await res.json();
     return data.success;
   },
@@ -691,7 +787,7 @@ export const api = {
     const res = await fetch(`/api/epl-highlights/${id}/like`, {
       method: 'POST'
     });
-    if (!res.ok) throw new Error('Failed to like epl highlight');
+    if (!res.ok) await throwApiError(res, 'Failed to like epl highlight');
     return res.json();
   }
 };

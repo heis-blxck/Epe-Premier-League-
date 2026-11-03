@@ -249,7 +249,9 @@ export const LineupBuilder: React.FC<LineupBuilderProps> = ({
       }
     } catch (err: any) {
       console.error('Error saving lineup:', err);
-      setError(err.message || 'Failed to save lineup');
+      const errMsg = err.message || 'Failed to save lineup';
+      setError(errMsg);
+      onShowToast(errMsg);
     } finally {
       setIsSaving(false);
     }

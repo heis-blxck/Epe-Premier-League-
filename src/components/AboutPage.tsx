@@ -39,8 +39,8 @@ Through this digital transformation and the launch of our official application, 
       </div>
 
       {/* Leadership & Governance */}
-      <div className="bg-[#800020] rounded-[2rem] p-8 md:p-12 shadow-xl text-white">
-        <h2 className="text-2xl font-black text-white mb-8 tracking-tight border-b border-[#a00028] pb-4">Leadership & Governance</h2>
+      <div className="bg-gradient-to-br from-[#800020] via-[#800020] to-[#881337] rounded-[2rem] p-8 md:p-12 shadow-xl shadow-[#800020]/20 text-white border border-[#FBB931]/30">
+        <h2 className="text-2xl font-black text-white mb-8 tracking-tight border-b border-[#FBB931]/40 pb-4">Leadership & Governance</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {(settings?.leadership || []).map((leader, index) => (
             <div key={index} className="bg-black/20 rounded-2xl p-6 backdrop-blur-sm border border-white/10 text-center flex flex-col items-center">

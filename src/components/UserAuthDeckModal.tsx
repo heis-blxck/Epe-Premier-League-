@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useBackHandler } from '../utils/backManager';
+import { useURLModal } from '../hooks/useURLModal';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+
 import { UserAccount, Team, AdminUser, ThemeMode, AppSettings } from '../types';
 import { VerifiedBadge } from './VerifiedBadge';
 import { EpeLogo } from './EpeLogo';
@@ -49,13 +51,11 @@ import {
 import { api } from '../services/api';
 
 interface UserAuthDeckModalProps {
-  isOpen: boolean;
-  onClose: () => void;
   currentUser: UserAccount | null;
   teams: Team[];
   admins: AdminUser[];
   isAdmin?: boolean;
-  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string) => Promise<void>;
+  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string) => Promise<void>;
   onUpdateProfile: (data: Partial<UserAccount> & { email: string }) => Promise<void>;
   onLogout: () => void;
   onDeleteAccount?: (email: string) => Promise<void>;
@@ -79,8 +79,6 @@ const AVATAR_PRESETS = [
 ];
 
 export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
-  isOpen,
-  onClose,
   currentUser,
   teams,
   admins,
@@ -97,8 +95,81 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
   onToggleNotifications,
   settings
 }) => {
-  const [viewMode, setViewMode] = useState<'profile' | 'settings' | 'login' | 'edit_profile'>('profile');
-  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const { isOpen, closeModal, modalData } = useURLModal<{ stage?: 'profile' | 'settings' | 'login' | 'edit_profile' | 'avatar_upload' | 'delete_confirm' | 'support' | 'signup' }>('authDeck');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  const urlStage = searchParams.get('stage') || modalData?.stage;
+  const validStages = ['profile', 'settings', 'login', 'edit_profile', 'avatar_upload', 'delete_confirm', 'support', 'signup'];
+
+  const getInitialStage = () => {
+    if (urlStage && validStages.includes(urlStage)) {
+      return urlStage;
+    }
+    return !currentUser ? 'login' : 'profile';
+  };
+
+  const [viewModeState, setViewModeState] = useState(getInitialStage);
+
+  const prevIsOpenRef = useRef(isOpen);
+  const prevUrlStageRef = useRef(urlStage);
+  const prevUserEmailRef = useRef(currentUser?.email);
+
+  React.useEffect(() => {
+    const wasOpen = prevIsOpenRef.current;
+    const urlStageChanged = prevUrlStageRef.current !== urlStage;
+    const userEmailChanged = prevUserEmailRef.current !== currentUser?.email;
+
+    prevIsOpenRef.current = isOpen;
+    prevUrlStageRef.current = urlStage;
+    prevUserEmailRef.current = currentUser?.email;
+
+    if (!isOpen) {
+      if (urlStage && validStages.includes(urlStage)) {
+        setViewModeState(urlStage);
+      } else {
+        setViewModeState(!currentUser ? 'login' : 'profile');
+      }
+      return;
+    }
+
+    // Modal is OPEN:
+    // 1) Just opened now
+    if (!wasOpen && isOpen) {
+      if (urlStage && validStages.includes(urlStage)) {
+        setViewModeState(urlStage);
+      } else {
+        setViewModeState(!currentUser ? 'login' : 'profile');
+      }
+      return;
+    }
+
+    // 2) Explicit stage change via URL/modalData
+    if (urlStageChanged && urlStage && validStages.includes(urlStage)) {
+      setViewModeState(urlStage);
+      return;
+    }
+
+    // 3) Auth status change (login/logout)
+    if (userEmailChanged) {
+      if (!currentUser) {
+        setViewModeState('login');
+      } else if (viewModeState === 'login' || viewModeState === 'signup') {
+        setViewModeState('profile');
+      }
+      return;
+    }
+
+    // DO NOT reset viewModeState on parent re-renders or background data sync!
+  }, [isOpen, urlStage, currentUser?.email]);
+
+  const viewMode = viewModeState;
+  const setViewMode = (mode: string) => {
+    setViewModeState(mode);
+  };
+  const authMode = modalData?.stage === 'signup' ? 'signup' : 'signin';
+  const setAuthMode = (mode: string) => setViewMode(mode);
 
   // Audio Alerts State
   const [soundFxEnabled, setSoundFxEnabled] = useState<boolean>(() => {
@@ -120,51 +191,29 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
   const [profileFantasyTeam, setProfileFantasyTeam] = useState('');
   const [profileTeam, setProfileTeam] = useState('');
   const [profileAvatar, setProfileAvatar] = useState('');
-  const [showCustomAvatarUploader, setShowCustomAvatarUploader] = useState(false);
+  const [showCustomAvatarUploader, setShowCustomAvatarUploader] = useState(modalData?.stage === 'avatar_upload');
   const [profileStatusMsg, setProfileStatusMsg] = useState<string | null>(null);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const showDeleteConfirm = modalData?.stage === 'delete_confirm';
+  const setShowDeleteConfirm = (val: boolean) => setViewMode(val ? 'delete_confirm' : 'settings');
 
   // Support & Toast state
   const [supportCategory, setSupportCategory] = useState<'Complaint' | 'Suggestion' | 'General Feedback'>('Suggestion');
   const [supportMessage, setSupportMessage] = useState('');
   const [supportStatus, setSupportStatus] = useState<string | null>(null);
-  const [showSupportModal, setShowSupportModal] = useState(false);
+  const [isSupportOpen, setIsSupportOpen] = useState(false);
+  const showSupportModal = isSupportOpen || viewMode === 'support' || modalData?.stage === 'support';
+  const setShowSupportModal = (val: boolean) => {
+    setIsSupportOpen(val);
+    setViewMode(val ? 'support' : 'profile');
+  };
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
+  const { isOpen: showInviteModal, closeModal: closeInviteModal, openModal: openInviteModal } = useURLModal('inviteFriends');
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const openShareModal = () => setIsShareModalOpen(true);
+  const closeShareModal = () => setIsShareModalOpen(false);
+  const showShareModal = isShareModalOpen;
   const [copiedLink, setCopiedLink] = useState(false);
-
-  useBackHandler(() => {
-    if (!isOpen) return false;
-    
-    if (showCustomAvatarUploader) {
-      setShowCustomAvatarUploader(false);
-      return true;
-    }
-    if (showDeleteConfirm) {
-      setShowDeleteConfirm(false);
-      return true;
-    }
-    if (showSupportModal) {
-      setShowSupportModal(false);
-      return true;
-    }
-    if (showInviteModal) {
-      setShowInviteModal(false);
-      return true;
-    }
-    if (showShareModal) {
-      setShowShareModal(false);
-      return true;
-    }
-    if (viewMode !== 'profile' && viewMode !== 'login') {
-      setViewMode(currentUser ? 'profile' : 'login');
-      return true;
-    }
-    
-    return false; // Let App.tsx handle closing the main deck modal
-  }, [isOpen, showCustomAvatarUploader, showDeleteConfirm, showSupportModal, showInviteModal, showShareModal, viewMode, currentUser]);
 
   const [scrollY, setScrollY] = useState(0);
 
@@ -174,25 +223,13 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
       setProfileFantasyTeam(currentUser.fantasyTeamName || `${currentUser.name || 'Manager'}'s XI`);
       setProfileTeam(currentUser.favoriteTeamId || '');
       setProfileAvatar(currentUser.avatarUrl || AVATAR_PRESETS[0].url);
-      if (viewMode === 'login') {
-        setViewMode('profile');
-      }
     } else {
-      setViewMode('login');
       setEmailInput('');
       setPasswordInput('');
       setNameInput('');
       setStatusMsg(null);
     }
   }, [currentUser, teams]);
-
-  useEffect(() => {
-    const handleReset = () => {
-      if (currentUser) setViewMode('profile');
-    };
-    window.addEventListener('reset-profile-tab', handleReset);
-    return () => window.removeEventListener('reset-profile-tab', handleReset);
-  }, [currentUser]);
 
   if (!isOpen) return null;
 
@@ -272,14 +309,18 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
         authMode === 'signup' ? nameInput.trim() || undefined : undefined, 
         selectedTeam || undefined,
         authMode === 'signup' ? signupAvatar : undefined,
-        undefined
+        undefined,
+        passwordInput.trim() || undefined
       );
       if (onNavigateToTab) onNavigateToTab('matches');
       setStatusMsg('Successfully authenticated!');
       setViewMode('profile');
-      onClose();
+      closeModal();
     } catch (err: any) {
-      setStatusMsg(err.message || 'Login failed');
+      console.error("User Auth/Signup Error:", err);
+      const codeStr = err?.code ? `[${err.code}] ` : '';
+      const msgStr = err?.message || (typeof err === 'string' ? err : 'Authentication failed');
+      setStatusMsg(`${codeStr}${msgStr}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -291,7 +332,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
     try {
       await onDeleteAccount(currentUser.email);
       setShowDeleteConfirm(false);
-      onClose();
+      closeModal();
     } catch (err: any) {
       setProfileStatusMsg(err.message || 'Failed to delete account');
     } finally {
@@ -326,8 +367,9 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
 
   const handleSubmitSupport = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser && !emailInput.trim()) {
-      setSupportStatus('Please provide an email address.');
+    const contactEmail = currentUser?.email || emailInput.trim();
+    if (!contactEmail) {
+      setSupportStatus('Please provide a valid email address.');
       return;
     }
     if (!supportMessage.trim()) {
@@ -338,12 +380,21 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
     setSupportStatus(null);
     try {
       await api.submitSupportTicket({
-        email: currentUser?.email || emailInput.trim(),
+        email: contactEmail,
         name: currentUser?.name || nameInput.trim() || 'Visitor',
         category: supportCategory,
         message: supportMessage.trim()
       });
-      setSupportStatus('Support message successfully sent and routed to founder admin (itzjeda10@gmail.com)!');
+
+      // Construct mailto link to official email
+      const officialEmail = "lasuitesepepremierleague@gmail.com";
+      const subject = encodeURIComponent(`[EPL ${supportCategory}] Feedback from ${currentUser?.name || 'Fan'}`);
+      const body = encodeURIComponent(`Name: ${currentUser?.name || nameInput || 'Fan'}\nEmail: ${contactEmail}\nCategory: ${supportCategory}\n\nMessage / Feedback:\n${supportMessage.trim()}`);
+      
+      // Open mail client
+      window.location.href = `mailto:${officialEmail}?subject=${subject}&body=${body}`;
+
+      setSupportStatus('Feedback submitted! Opening email app to route directly to lasuitesepepremierleague@gmail.com');
       setSupportMessage('');
     } catch (err: any) {
       setSupportStatus(err.message || 'Failed to submit support ticket');
@@ -360,9 +411,13 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
   const favClub = teams.find(t => t.id === currentUser?.favoriteTeamId);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col w-full h-full min-h-screen overflow-hidden animate-fadeIn pt-safe pb-safe px-safe ios-scroll">
+    <div 
+      className="fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col w-full h-full min-h-screen overflow-hidden animate-fadeIn pt-safe pb-safe px-safe ios-scroll"
+      onClick={(e) => e.stopPropagation()}
+    >
       <div 
         className="w-full h-full flex flex-col transition-all overflow-hidden bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 relative max-w-3xl mx-auto"
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Toast Notification Banner */}
         {toastMessage && (
@@ -373,7 +428,8 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
             </div>
             <button
               type="button"
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 if (toastTimeoutRef.current) {
                   clearTimeout(toastTimeoutRef.current);
                   toastTimeoutRef.current = null;
@@ -391,13 +447,18 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
         {/* SCROLLABLE BODY CONTENT CONTAINER */}
         <div className="flex-1 overflow-y-auto ios-scroll flex flex-col relative" onScroll={handleScroll}>
           {/* LAYER 1: STICKY COMPACT TOP BAR (The Top Mask) */}
-          <div className="sticky top-0 z-[100] bg-[#800020] text-white px-5 py-4 border-b border-rose-900/60 flex items-center justify-between shadow-md shrink-0">
+          <div className="sticky top-0 z-[100] bg-gradient-to-r from-[#800020] to-[#881337] text-white px-5 py-4 border-b border-[#881337]/50 flex items-center justify-between shadow-md shrink-0">
             <button
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation();
                 if (viewMode === 'settings' || viewMode === 'edit_profile') {
                   setViewMode('profile');
+                } else if (viewMode === 'avatar_upload') {
+                  setViewMode('edit_profile');
+                } else if (viewMode === 'delete_confirm' || viewMode === 'support') {
+                  setViewMode('settings');
                 } else {
-                  onClose();
+                  closeModal();
                 }
               }}
               className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
@@ -411,7 +472,10 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
             <div className="flex items-center gap-2">
               {currentUser && viewMode === 'profile' && (
                 <button
-                  onClick={() => setViewMode('settings')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setViewMode('settings');
+                  }}
                   className="p-2 rounded-full transition-colors cursor-pointer bg-white/10 hover:bg-white/20 text-white"
                   title="Open Settings"
                 >
@@ -423,7 +487,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
 
           {/* FOLDING HERO HEADER (Layer 2 & 3) */}
           {viewMode !== 'settings' && (
-            <div className="bg-[#800020] text-white shrink-0 flex flex-col items-center justify-center pt-2 pb-6 border-b border-rose-900/60 relative z-10">
+            <div className="bg-gradient-to-b from-[#800020] to-[#800020] text-white shrink-0 flex flex-col items-center justify-center pt-2 pb-6 border-b border-[#881337]/50 relative z-10">
               {/* Layer 2: Avatar Row */}
               <div 
                 className="flex flex-col items-center transition-opacity" 
@@ -436,7 +500,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                 </div>
                 <div className="relative group">
                   <img 
-                    src={currentUser?.avatarUrl || profileAvatar || AVATAR_PRESETS[0].url} 
+                    src={(viewMode === 'edit_profile' || viewMode === 'avatar_upload') ? (profileAvatar || currentUser?.avatarUrl || AVATAR_PRESETS[0].url) : (currentUser?.avatarUrl || AVATAR_PRESETS[0].url)} 
                     alt={currentUser?.name || 'Manager Avatar'}
                     className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover shadow-2xl bg-slate-900 border-4 ring-4 border-amber-400/90 ring-white/10"
                   />
@@ -455,13 +519,6 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                     Welcome to EPL Premier League
                   </h3>
                 )}
-                <button 
-                  onClick={() => setShowShareModal(true)} 
-                  className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors text-white" 
-                  title="Share App"
-                >
-                  <Share2 className="w-4 h-4" />
-                </button>
               </div>
             </div>
           )}
@@ -479,7 +536,6 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                 <button
                   onClick={() => {
                     if (onNavigateToTab) onNavigateToTab('fantasy');
-                    onClose();
                   }}
                   className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
                 >
@@ -496,7 +552,6 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                 <button
                   onClick={() => {
                     if (onNavigateToTab) onNavigateToTab('standings');
-                    onClose();
                   }}
                   className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
                 >
@@ -553,7 +608,6 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                   {/* About Epe Premier League */}
                   <button
                     onClick={() => {
-                      onClose();
                       if (onNavigateToTab) onNavigateToTab('about');
                     }}
                     className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
@@ -673,7 +727,6 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                     <button
                       onClick={() => {
                         if (onNavigateToAdmin) onNavigateToAdmin();
-                        onClose();
                       }}
                       className="w-full px-4 py-3.5 flex items-center justify-between bg-amber-400/10 hover:bg-amber-400/20 transition-colors text-left cursor-pointer group"
                     >
@@ -697,7 +750,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                   
                   {/* Share App */}
                   <button
-                    onClick={() => setShowShareModal(true)}
+                    onClick={() => openShareModal()}
                     className="w-full px-4 py-3.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors text-left cursor-pointer group"
                   >
                     <div className="flex items-center gap-3.5">
@@ -780,7 +833,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
           )}
 
           {/* ================= 3. EDIT PROFILE VIEW ================= */}
-          {currentUser && viewMode === 'edit_profile' && (
+          {currentUser && (viewMode === 'edit_profile' || viewMode === 'avatar_upload') && (
             <form onSubmit={handleSaveProfile} className="space-y-4">
               <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 shadow-sm">
                 <h4 className="text-xs font-black uppercase tracking-wider text-amber-500">Update Profile Details</h4>
@@ -1102,7 +1155,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
               <button
                 onClick={() => {
                   handleCopyShareLink();
-                  setShowInviteModal(false);
+                  closeInviteModal();
                 }}
                 className="p-1.5 rounded-lg bg-amber-400 text-slate-950 font-bold hover:bg-amber-300 cursor-pointer shrink-0 ml-2"
               >
@@ -1111,7 +1164,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
             </div>
 
             <button
-              onClick={() => setShowInviteModal(false)}
+              onClick={() => closeInviteModal()}
               className="w-full py-2.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs hover:bg-slate-700 cursor-pointer"
             >
               Close
@@ -1131,7 +1184,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white">Support & Feedback Center</h3>
-                  <p className="text-xs text-slate-400">Submit your complaints or feedback securely</p>
+                  <p className="text-xs text-slate-400">Routes to official email: <strong className="text-amber-400">lasuitesepepremierleague@gmail.com</strong></p>
                 </div>
               </div>
               <button
@@ -1218,7 +1271,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
           <div className="w-full max-w-sm bg-slate-900 border border-slate-800 text-white rounded-2xl p-6 shadow-2xl relative space-y-4 text-center">
             <button
               onClick={() => {
-                setShowShareModal(false);
+                closeShareModal();
                 setCopiedLink(false);
               }}
               className="absolute top-3 right-3 p-1.5 rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
@@ -1242,7 +1295,8 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
             <div className="flex items-center gap-2 pt-1">
               <button
                 onClick={async () => {
-                  const shareUrl = 'https://epe-premier-league.ai.studio';
+                  const shareUrl = window.location.origin || 'https://epe-premier-league.ai.studio';
+                  let shared = false;
                   if (navigator.share) {
                     try {
                       await navigator.share({
@@ -1251,15 +1305,25 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
                         url: shareUrl,
                       });
                       triggerToast('Shared successfully!');
-                      setShowShareModal(false);
+                      closeShareModal();
+                      shared = true;
                     } catch (e) {
-                      // Share dialog dismissed
+                      // Native share rejected or blocked in iframe
                     }
-                  } else if (navigator.clipboard) {
-                    await navigator.clipboard.writeText(shareUrl);
-                    setCopiedLink(true);
-                    triggerToast('App link copied to clipboard!');
-                    setTimeout(() => setCopiedLink(false), 2000);
+                  }
+                  if (!shared) {
+                    if (navigator.clipboard) {
+                      try {
+                        await navigator.clipboard.writeText(shareUrl);
+                        setCopiedLink(true);
+                        triggerToast('App link copied to clipboard!');
+                        setTimeout(() => setCopiedLink(false), 2000);
+                      } catch (err) {
+                        triggerToast('App Link: ' + shareUrl);
+                      }
+                    } else {
+                      triggerToast('App Link: ' + shareUrl);
+                    }
                   }
                 }}
                 className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 text-slate-950 font-black text-xs shadow-lg hover:brightness-110 transition-all flex items-center justify-center gap-2 cursor-pointer"

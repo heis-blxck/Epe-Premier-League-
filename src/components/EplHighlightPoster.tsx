@@ -52,8 +52,10 @@ export const EplHighlightPoster: React.FC<EplHighlightPosterProps> = ({
       setHasLiked((prev) => ({ ...prev, [id]: true }));
       const updated = await api.likeEplHighlight(id);
       setHighlights((prev) => prev.map((h) => (h.id === id ? updated : h)));
-    } catch (err) {
+    } catch (err: any) {
+      setHasLiked((prev) => ({ ...prev, [id]: false }));
       console.error("Failed to like highlight:", err);
+      triggerToast(err.message || "Failed to like highlight");
     }
   };
 

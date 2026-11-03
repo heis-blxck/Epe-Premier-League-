@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import { useBackHandler } from '../utils/backManager';
+import React, { useState, useMemo } from "react";
+import { useURLModal } from "../hooks/useURLModal";
+
 import { VerifiedBadge } from "./VerifiedBadge";
 import { NewsArticle, AdminUser, MatchVideo, EplHighlight } from "../types";
 import {
@@ -38,10 +39,8 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
   currentAdmin,
   onShowToast,
 }) => {
-  const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(
-    null,
-  );
-  const [teaserArticle, setTeaserArticle] = useState<NewsArticle | null>(null);
+  
+  
   const [subscribedEmail, setSubscribedEmail] = useState("");
   const [subscriptionSuccess, setSubscriptionSuccess] = useState(false);
   const [hasLiked, setHasLiked] = useState<Record<string, boolean>>({});
@@ -66,23 +65,12 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
   const featured = topNews[0];
   const rest = topNews.slice(1);
 
-  const [showAllNewsModal, setShowAllNewsModal] = useState(false);
+  const { isOpen: isNewsModalOpen, openModal: openNewsModal, closeModal: closeNewsModal, modalData: newsModalData } = useURLModal<{ articleId: string; stage: 'teaser' | 'reader' }>('newsArticle');
 
-  useBackHandler(() => {
-    if (selectedArticle) {
-      setSelectedArticle(null);
-      return true;
-    }
-    if (teaserArticle) {
-      setTeaserArticle(null);
-      return true;
-    }
-    if (showAllNewsModal) {
-      setShowAllNewsModal(false);
-      return true;
-    }
-    return false;
-  }, [selectedArticle, teaserArticle, showAllNewsModal]);
+  const teaserArticle = isNewsModalOpen && newsModalData?.stage === 'teaser' ? publishedNews.find(n => n.id === newsModalData.articleId) : null;
+  const selectedArticle = isNewsModalOpen && newsModalData?.stage === 'reader' ? publishedNews.find(n => n.id === newsModalData.articleId) : null;
+
+  
 
   const handleSubscribe = (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,13 +87,12 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
 
     try {
       setHasLiked((prev) => ({ ...prev, [articleId]: true }));
-      const updated = await api.likeNews(articleId);
-      if (selectedArticle && selectedArticle.id === articleId) {
-        setSelectedArticle(updated);
-      }
+      await api.likeNews(articleId);
       if (onNewsUpdated) onNewsUpdated();
-    } catch (err) {
+    } catch (err: any) {
+      setHasLiked((prev) => ({ ...prev, [articleId]: false }));
       console.error("Failed to like article:", err);
+      if (onShowToast) onShowToast(err.message || "Failed to like article");
     }
   };
 
@@ -115,15 +102,16 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
 
     setIsPostingComment(true);
     try {
-      const updated = await api.addNewsComment(selectedArticle.id, {
+      await api.addNewsComment(selectedArticle.id, {
         authorName: currentUser?.name || "Anonymous Fan",
         content: commentText.trim(),
       });
-      setSelectedArticle(updated);
+      // modal will automatically re-render with updated article
       setCommentText("");
       if (onNewsUpdated) onNewsUpdated();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to post comment:", err);
+      if (onShowToast) onShowToast(err.message || "Failed to post comment");
     } finally {
       setIsPostingComment(false);
     }
@@ -232,7 +220,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
         <div className="bg-slate-900/90 rounded-2xl p-4 shadow-xl border border-slate-800 space-y-4">
           {featured && (
             <div
-              onClick={() => setTeaserArticle(featured)}
+              onClick={() => openNewsModal({ articleId: featured.id, stage: 'teaser' })}
               className="cursor-pointer group flex flex-col gap-3"
             >
               <div className="w-full aspect-video rounded-t-xl overflow-hidden relative">
@@ -271,7 +259,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
             {rest.map((article) => (
               <div
                 key={article.id}
-                onClick={() => setTeaserArticle(article)}
+                onClick={() => openNewsModal({ articleId: article.id, stage: 'teaser' })}
                 className="flex flex-row items-center gap-3 cursor-pointer group"
               >
                 <img
@@ -377,7 +365,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
         <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col animate-in slide-in-from-bottom-4 overflow-y-auto">
           <div className="absolute top-4 left-4 z-10">
             <button
-              onClick={() => setTeaserArticle(null)}
+              onClick={() => closeNewsModal()}
               className="w-10 h-10 bg-slate-900/80 backdrop-blur-md rounded-full flex items-center justify-center text-white hover:bg-amber-400 hover:text-[#800020] transition-colors border border-white/10 cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -417,7 +405,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
             </p>
 
             <button
-              onClick={() => setSelectedArticle(teaserArticle)}
+              onClick={() => openNewsModal({ articleId: teaserArticle?.id, stage: 'reader' })}
               className="mt-8 w-full border border-amber-400 text-amber-400 hover:bg-amber-400 hover:text-[#800020] font-black text-sm uppercase tracking-widest py-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg"
             >
               <span>[ ↗ READ ARTICLE ]</span>
@@ -434,7 +422,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
             <div className="bg-slate-950 px-6 py-3 border-b border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setSelectedArticle(null)}
+                  onClick={() => closeNewsModal()}
                   className="mr-2 p-1.5 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
                 >
                   <ArrowLeft className="w-5 h-5" />
@@ -493,8 +481,7 @@ export const NewsFeed: React.FC<NewsFeedProps> = ({
                       <VerifiedBadge role={selectedArticle.authorRole || 'news_reporter'} />
                     </div>
                     <div className="text-xs text-slate-400 font-medium">
-                      {selectedArticle.authorTitle ||
-                        "Senior Football Writer, Epe Dispatch"}
+                      {(selectedArticle.authorRole?.toUpperCase() === 'LEAGUE_OFFICIAL' || selectedArticle.authorRole?.toUpperCase() === 'OFFICIAL_LEAGUE') ? 'Football Association' : (selectedArticle.customReporterRole || selectedArticle.authorTitle || 'Reporter')}
                     </div>
                   </div>
                 </div>

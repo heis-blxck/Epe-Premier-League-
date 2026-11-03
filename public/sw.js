@@ -1,4 +1,4 @@
-const CACHE_NAME = 'epe-league-shell-v3';
+const CACHE_NAME = 'epe-league-shell-v4';
 const MASTER_LOGO_URL = 'https://i.postimg.cc/hjmBHkfN/08469fba-3b41-4117-964b-745b2eca53f4-20260726-052311-0000.png';
 
 const PRECACHE_ASSETS = [
@@ -7,6 +7,8 @@ const PRECACHE_ASSETS = [
   '/manifest.json',
   '/logo.png',
   '/logo.jpg',
+  '/icon-192x192.png',
+  '/icon-512x512.png',
   MASTER_LOGO_URL
 ];
 

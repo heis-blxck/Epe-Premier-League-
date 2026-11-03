@@ -1,25 +1,27 @@
+import { useNavigate } from 'react-router-dom';
+import { useURLModal } from '../hooks/useURLModal';
 import React from 'react';
 import { Player, Match } from '../types';
 import { X } from 'lucide-react';
-import { useBackHandler } from '../utils/backManager';
+
 
 interface PlayerFantasyBreakdownModalProps {
-  player: Player;
+  players: Player[];
   matches: Match[];
   selectedGw: number;
-  onClose: () => void;
 }
 
 export const PlayerFantasyBreakdownModal: React.FC<PlayerFantasyBreakdownModalProps> = ({
-  player,
+  players,
   matches,
-  selectedGw,
-  onClose
+  selectedGw
 }) => {
-  useBackHandler(() => {
-    onClose();
-    return true;
-  }, [onClose]);
+  const { isOpen, closeModal, modalData } = useURLModal<{ playerId?: string }>('fantasyBreakdown');
+  
+  if (!isOpen || !modalData?.playerId) return null;
+  const player = players.find(p => p.id === modalData.playerId);
+  if (!player) return null;
+  
   const gwMatches = matches.filter(m => m.matchday === selectedGw && (m.homeTeamId === player.teamId || m.awayTeamId === player.teamId));
   
   let totalPts = 0;
@@ -40,10 +42,14 @@ export const PlayerFantasyBreakdownModal: React.FC<PlayerFantasyBreakdownModalPr
     let redCards = 0;
 
     events.forEach(e => {
-      if (e.eventType === 'Goal' && e.playerId === player.id) goals++;
-      if (e.eventType === 'Goal' && e.assistPlayerId === player.id) assists++;
-      if (e.eventType === 'Yellow Card' && e.playerId === player.id) yellowCards++;
-      if (e.eventType === 'Red Card' && e.playerId === player.id) redCards++;
+      const typeStr = e.eventType as string;
+      if ((typeStr === 'Goal' || typeStr === 'Penalty Goal' || typeStr === 'penalty') && e.goalType !== 'own_goal') {
+        if (e.playerId === player.id) goals++;
+      }
+      const isAssister = e.assisterId === player.id || (e as any).assistPlayerId === player.id;
+      if (isAssister && (typeStr === 'Goal' || typeStr === 'Penalty Goal') && e.goalType !== 'own_goal') assists++;
+      if (typeStr === 'Yellow Card' && e.playerId === player.id) yellowCards++;
+      if (typeStr === 'Red Card' && e.playerId === player.id) redCards++;
     });
 
     if (goals > 0) {
@@ -100,7 +106,8 @@ export const PlayerFantasyBreakdownModal: React.FC<PlayerFantasyBreakdownModalPr
         if (e.eventType === 'Goal' && e.playerId === player.id) {
           pts += (player.position === 'GK' || player.position === 'DEF' ? 6 : player.position === 'MID' ? 5 : 4);
         }
-        if (e.eventType === 'Goal' && e.assistPlayerId === player.id) pts += 3;
+        const isAssister = e.assisterId === player.id || (e as any).assistPlayerId === player.id;
+        if (isAssister && (e.eventType === 'Goal' || (e.eventType as string) === 'Penalty Goal')) pts += 3;
       });
       if (gc === 0 && (player.position === 'GK' || player.position === 'DEF')) pts += 4;
     });
@@ -109,7 +116,7 @@ export const PlayerFantasyBreakdownModal: React.FC<PlayerFantasyBreakdownModalPr
 
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md" onClick={onClose} />
+      <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md" onClick={closeModal} />
       <div className="relative w-full max-w-lg bg-slate-950 rounded-[2.5rem] p-6 shadow-2xl border border-slate-800 flex flex-col gap-6 max-h-[90vh] overflow-y-auto">
         
         {/* Header */}
@@ -123,7 +130,7 @@ export const PlayerFantasyBreakdownModal: React.FC<PlayerFantasyBreakdownModalPr
               <p className="text-xs font-bold text-rose-300">{player.position} &bull; #{player.shirtNumber}</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-full bg-slate-900 text-slate-300 hover:text-white cursor-pointer">
+          <button onClick={closeModal} className="p-2 rounded-full bg-slate-900 text-slate-300 hover:text-white cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>

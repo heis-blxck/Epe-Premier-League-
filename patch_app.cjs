@@ -1,41 +1,46 @@
 const fs = require('fs');
-let code = fs.readFileSync('src/App.tsx', 'utf8');
+let content = fs.readFileSync('src/App.tsx', 'utf8');
 
-// Remove Firebase messaging import
-code = code.replace(/import \{ getMessaging, getToken \} from 'firebase\/messaging';\n/, '');
-code = code.replace(/import \{ initializeApp \} from 'firebase\/app';\n/, '');
+const regex = /\/\/ Server-Sent Events for Real-Time Notifications\s+useEffect\(\(\) => \{\s+const sse = new EventSource\('\/api\/notifications\/stream'\);\s+sse\.onmessage = async \(event\) => \{\s+try \{\s+const notif = JSON\.parse\(event\.data\);\s+if \(!notif \|\| !notif\.id\) return;\s+setNotifications\(prev => \{\s+if \(prev\.some\(n => n\.id === notif\.id\)\) return prev;\s+return \[notif, \.\.\.prev\];\s+\}\);\s+displayToast\(notif, 4000\);/;
 
-// Remove requestFCMToken
-code = code.replace(/\/\/ Request FCM Token\s*const requestFCMToken = async \(\) => \{[\s\S]*?  \};\n/, '');
+const replacement = `  // Server-Sent Events for Real-Time Notifications
+  const processedNotifs = React.useRef(new Set<string>());
 
-// Remove call to requestFCMToken in useEffect
-code = code.replace(/    if \(currentUser && currentUser\.notificationsEnabled && Notification\.permission === 'granted'\) \{\s*requestFCMToken\(\);\s*\}/, '');
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('processedNotifs');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        parsed.forEach((id: string) => processedNotifs.current.add(id));
+      }
+    } catch(e) {}
 
-// Remove call to requestFCMToken in handleToggleNotifications
-code = code.replace(/      if \(enabled && permissionGranted\) \{\s*requestFCMToken\(\);\s*\}/, '');
+    const sse = new EventSource('/api/notifications/stream');
+    
+    sse.onmessage = async (event) => {
+      try {
+        const notif = JSON.parse(event.data);
+        if (!notif || !notif.id) return;
 
-// Update handleTriggerTestNotification
-const testNotifRegex = /  const handleTriggerTestNotification = async \(\) => \{[\s\S]*?setTimeout\(\(\) => setToastNotif\(null\), 5000\);\n  \};/;
+        if (processedNotifs.current.has(notif.id)) return;
+        processedNotifs.current.add(notif.id);
 
-const newTestNotif = `  const handleTriggerTestNotification = async () => {
-    const randomTeam = teams[Math.floor(Math.random() * teams.length)] || teams[0];
-    const newNotif = {
-      title: \`⚽ TEST ALERT: \${randomTeam?.name || 'Epe Club'} Scores!\`,
-      message: \`Thunderous strike from 25 yards out into the top corner!\`,
-      type: 'match_goal'
-    };
+        try {
+          const arr = Array.from(processedNotifs.current).slice(-50);
+          localStorage.setItem('processedNotifs', JSON.stringify(arr));
+        } catch(e) {}
 
-    setToastNotif({
-      id: \`toast-\${Date.now()}\`,
-      title: newNotif.title,
-      message: newNotif.message,
-      type: 'match_goal',
-      timestamp: new Date().toISOString(),
-      read: false
-    });
-    setTimeout(() => setToastNotif(null), 5000);
-  };`;
+        setNotifications(prev => {
+          if (prev.some(n => n.id === notif.id)) return prev;
+          return [notif, ...prev];
+        });
+        displayToast(notif, 4000);`;
 
-code = code.replace(testNotifRegex, newTestNotif);
-
-fs.writeFileSync('src/App.tsx', code);
+if (regex.test(content)) {
+    content = content.replace(regex, replacement);
+    fs.writeFileSync('src/App.tsx', content, 'utf8');
+    console.log("Patched App.tsx");
+} else {
+    console.error("Target not found!");
+    process.exit(1);
+}

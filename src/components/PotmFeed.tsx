@@ -39,7 +39,7 @@ export function PotmFeed() {
     <div className="space-y-8 pb-20">
       {potmList.map((potm, index) => (
         <div key={potm.id || index} className="max-w-[480px] mx-auto flex flex-col">
-          <div className="relative bg-gradient-to-br from-[#800020] to-[#3a000c] rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.6)] border-2 border-[#a00028] aspect-[3/4] flex flex-col w-full mb-6">
+          <div className="relative bg-gradient-to-br from-[#800020] via-[#881337] to-[#7c2d12] rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(128,0,32,0.4)] border-2 border-[#FBB931] aspect-[3/4] flex flex-col w-full mb-6">
             <div className="p-6 md:p-8 flex justify-between items-start z-20 relative bg-black/20 backdrop-blur-sm border-b border-white/10">
               <div className="max-w-[75%]">
                 <h2 className="text-3xl md:text-4xl font-black text-white leading-none tracking-tighter drop-shadow-md">

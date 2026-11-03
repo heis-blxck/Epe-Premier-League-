@@ -68,26 +68,46 @@ export const MediaUploader: React.FC<MediaUploaderProps> = ({ accept = "image/*"
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const MAX_BYTES = 2 * 1024 * 1024; // 2MB Limit
-      if (file.size > MAX_BYTES) {
-        const msg = 'File exceeds 2MB limit. Please compress and try again.';
-        setUploadError(msg);
-        if (onErrorToast) {
-          onErrorToast(msg);
-        } else {
-          alert(msg);
-        }
-        if (e.target) e.target.value = '';
-        return;
-      }
-
       setUploadError(null);
       const reader = new FileReader();
       reader.onload = (uploadEvent) => {
         const resultUrl = uploadEvent.target?.result as string;
         if (resultUrl) {
-          setPreviewUrl(resultUrl);
-          notify(resultUrl);
+          const img = new Image();
+          img.onerror = () => { if (onErrorToast) onErrorToast('Failed to load image format.'); setUploadError('Invalid image format'); };
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 400;
+            const MAX_HEIGHT = 400;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_WIDTH) {
+                height = Math.round(height * (MAX_WIDTH / width));
+                width = MAX_WIDTH;
+              }
+            } else {
+              if (height > MAX_HEIGHT) {
+                width = Math.round(width * (MAX_HEIGHT / height));
+                height = MAX_HEIGHT;
+              }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              const compressedUrl = canvas.toDataURL('image/webp', 0.8);
+              setPreviewUrl(compressedUrl);
+              notify(compressedUrl);
+            } else {
+               setPreviewUrl(resultUrl);
+               notify(resultUrl);
+            }
+          };
+          img.src = resultUrl;
         }
       };
       reader.readAsDataURL(file);
@@ -188,27 +208,23 @@ export const MediaUploader: React.FC<MediaUploaderProps> = ({ accept = "image/*"
 
       {/* Tab 1: Local File Upload */}
       {activeTab === 'upload' && (
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed border-slate-800 hover:border-amber-400/60 bg-slate-900/60 hover:bg-slate-900 p-4 rounded-xl text-center cursor-pointer transition-all space-y-2"
-        >
+        <label className="block border-2 border-dashed border-slate-800 hover:border-amber-400/60 bg-slate-900/60 hover:bg-slate-900 p-4 rounded-xl text-center cursor-pointer transition-all space-y-2">
           <input
             type="file"
-            ref={fileInputRef}
             onChange={handleFileChange}
             accept={accept}
             className="hidden"
           />
-          <div className="w-10 h-10 rounded-full bg-slate-800 text-amber-400 mx-auto flex items-center justify-center">
+          <div className="w-10 h-10 rounded-full bg-slate-800 text-amber-400 mx-auto flex items-center justify-center pointer-events-none">
             <Upload className="w-5 h-5" />
           </div>
-          <p className="text-xs font-bold text-slate-200">
-            Click to upload digital media file from device
+          <p className="text-xs font-bold text-slate-200 pointer-events-none">
+            Tap to upload digital media file from device
           </p>
-          <p className="text-[10px] text-slate-500">
+          <p className="text-[10px] text-slate-500 pointer-events-none">
             Supports PNG, JPG, WEBP, SVG
           </p>
-        </div>
+        </label>
       )}
 
       {/* Tab 2: Custom URL */}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useURLModal } from '../hooks/useURLModal';
 import { Trophy, Radio, BarChart3, Newspaper, ShieldAlert, RefreshCw, ShieldCheck, User, Sparkles, Moon, Sun, Bell, Info, Download, Smartphone, Share, PlusSquare, X, CheckCircle2 } from 'lucide-react';
 import { AdminUser, UserAccount, AppNotification, ThemeMode, AppSettings } from '../types';
 import { EpeLogo } from './EpeLogo';
@@ -67,7 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
   const isDark = theme === 'dark';
   const [isInstalled, setIsInstalled] = useState<boolean>(isPwaInstalled);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showIosPrompt, setShowIosPrompt] = useState<boolean>(false);
+  const { isOpen: showIosPrompt, closeModal: closeIosPrompt, openModal: openIosPrompt } = useURLModal('iosInstallPrompt');
 
   useEffect(() => {
     if (isPwaInstalled()) {
@@ -75,8 +76,13 @@ export const Header: React.FC<HeaderProps> = ({
       return;
     }
 
+    if ((window as any).deferredPwaPrompt) {
+      setDeferredPrompt((window as any).deferredPwaPrompt);
+    }
+
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
+      (window as any).deferredPwaPrompt = e;
       setDeferredPrompt(e);
     };
 
@@ -110,30 +116,32 @@ export const Header: React.FC<HeaderProps> = ({
   }, []);
 
   const handleGetAppClick = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const choiceResult = await deferredPrompt.userChoice;
+    const promptEvent = deferredPrompt || (window as any).deferredPwaPrompt;
+    if (promptEvent) {
+      promptEvent.prompt();
+      const choiceResult = await promptEvent.userChoice;
       if (choiceResult && choiceResult.outcome === 'accepted') {
         localStorage.setItem('epl_app_installed', 'true');
         setIsInstalled(true);
       }
       setDeferredPrompt(null);
+      (window as any).deferredPwaPrompt = null;
     } else {
-      setShowIosPrompt(true);
+      openIosPrompt();
     }
   };
 
   const handleConfirmInstalled = () => {
     localStorage.setItem('epl_app_installed', 'true');
     setIsInstalled(true);
-    setShowIosPrompt(false);
+    closeIosPrompt();
   };
 
   return (
     <header className={`shadow-2xl sticky top-0 z-40 border-b transition-colors pt-safe ${
       isDark 
-        ? 'bg-[#800020] text-white border-rose-950/80' 
-        : 'bg-gradient-to-r from-[#800020] via-rose-900 to-[#800020] text-white border-rose-800'
+        ? 'bg-gradient-to-r from-[#800020] via-[#58061e] to-[#881337] text-white border-rose-950/80' 
+        : 'bg-gradient-to-r from-[#800020] via-[#6b092b] to-[#881337] text-white border-rose-900'
     }`}>
       {/* Top Banner */}
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
@@ -155,7 +163,7 @@ export const Header: React.FC<HeaderProps> = ({
                   {settings?.seasonLabel || settings?.leagueSeason || '2026 SEASON'}
                 </span>
               </div>
-              <p className="text-[9px] sm:text-xs text-rose-200/90 font-medium tracking-wide truncate">
+              <p className="text-[9px] sm:text-xs text-orange-100 font-medium tracking-wide truncate">
                 Official Mobile App
               </p>
             </div>
@@ -189,7 +197,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={onRefresh}
               disabled={isRefreshing}
-              className="p-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-100 transition-colors border border-rose-800/60 flex items-center justify-center cursor-pointer shadow-sm shrink-0"
+              className="p-2 rounded-xl bg-orange-950/80 hover:bg-orange-900 text-orange-100 transition-colors border border-orange-800/60 flex items-center justify-center cursor-pointer shadow-sm shrink-0"
               title="Refresh Scores"
             >
               <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
@@ -234,7 +242,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
           <div className="relative w-full max-w-md bg-slate-900 border border-amber-400/40 rounded-2xl shadow-2xl overflow-hidden p-6 text-slate-100">
             <button 
-              onClick={() => setShowIosPrompt(false)}
+              onClick={() => closeIosPrompt()}
               className="absolute top-4 right-4 p-1 rounded-full bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
@@ -282,7 +290,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span>I've Installed It</span>
               </button>
               <button
-                onClick={() => setShowIosPrompt(false)}
+                onClick={() => closeIosPrompt()}
                 className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 hover:text-white font-bold text-xs transition-colors cursor-pointer"
               >
                 Close

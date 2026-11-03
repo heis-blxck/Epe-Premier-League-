@@ -6,6 +6,11 @@
     --sab: env(safe-area-inset-bottom, 0px);
     --sal: env(safe-area-inset-left, 0px);
     --sar: env(safe-area-inset-right, 0px);
+    /* Official Burgundy Brand Palette */
+    --color-burgundy-deep: #800020;
+    --color-burgundy-mid: #58061e;
+    --color-burgundy-gold: #FBB931;
+    --color-burgundy-light: #FFE4E6;
   }
 
   html {
@@ -78,4 +83,20 @@
   min-height: -webkit-fill-available;
   min-height: 100dvh;
 }
+
+@keyframes goalGlowPulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 15px rgba(128, 0, 32, 0.8));
+  }
+  50% {
+    transform: scale(1.05);
+    filter: drop-shadow(0 0 35px rgba(251, 185, 49, 0.95));
+  }
+}
+
+.animate-goal-glow {
+  animation: goalGlowPulse 1.8s infinite ease-in-out;
+}
+
 

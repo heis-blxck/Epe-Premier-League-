@@ -1,6 +1,7 @@
 import React from 'react';
 import { Match, Team, AdminUser } from '../types';
 import { Trophy, Shield, ChevronRight, Zap, Flame, Award, Sparkles, CheckCircle2 } from 'lucide-react';
+import { TeamLogo } from './TeamLogo';
 
 interface LeagueCupBracketProps {
   standings: Team[];
@@ -102,7 +103,7 @@ export const LeagueCupBracket: React.FC<LeagueCupBracketProps> = ({
                 {homeSeed}
               </span>
             )}
-            <img src={home?.logoUrl || 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=120&q=80'} alt="" className="w-6 h-6 object-contain" />
+            <TeamLogo team={home} className="w-6 h-6" />
             <span className="font-extrabold text-xs text-white truncate">{home?.name || 'TBD'}</span>
           </div>
 
@@ -126,7 +127,7 @@ export const LeagueCupBracket: React.FC<LeagueCupBracketProps> = ({
                 {awaySeed}
               </span>
             )}
-            <img src={away?.logoUrl || 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=120&q=80'} alt="" className="w-6 h-6 object-contain" />
+            <TeamLogo team={away} className="w-6 h-6" />
             <span className="font-extrabold text-xs text-white truncate">{away?.name || 'TBD'}</span>
           </div>
 
@@ -180,7 +181,7 @@ export const LeagueCupBracket: React.FC<LeagueCupBracketProps> = ({
   return (
     <div className="space-y-6">
       {/* BANNER HEADER */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#800020] via-[#500014] to-slate-950 p-6 text-white shadow-2xl border border-red-900/40">
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#800020] via-[#881337] to-slate-950 p-6 text-white shadow-2xl border border-[#881337]/40">
         <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-300 text-xs font-black uppercase">

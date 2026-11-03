@@ -85,6 +85,10 @@ export interface Advertisement {
   companyName: string;
   imageUrl: string;
   linkUrl: string;
+  mediaType?: 'image' | 'video';
+  mediaUrl?: string;
+  duration?: number;
+  targetLink?: string;
   isActive: boolean;
   position: 'top' | 'sidebar' | 'footer';
 }
@@ -97,6 +101,8 @@ export interface AppSettings {
   defaultTheme: ThemeMode;
   leagueSeason: string;
   visionText?: string;
+  sponsor_logo_url?: string;
+  sponsorLogoUrl?: string;
   leadership?: {
     name: string;
     role: string;
@@ -108,6 +114,7 @@ export interface Player {
   id: string;
   name: string;
   teamId: string;
+  teamName?: string;
   position: PlayerPosition;
   goals: number;
   assists: number;
@@ -121,17 +128,24 @@ export interface Player {
   fantasyPoints?: number;
   bonusPoints?: number;
   price?: number; // e.g. 8.5 (₦m)
+  currentPrice?: number; // alias for price for global current valuation
+  fantasyPrice?: number; // alias for fantasy price
   isSuspended?: boolean;
   suspensionWeeks?: number; // 1 or 2 gameweeks
   isInjured?: boolean;
   injuryStatus?: 'Fit' | 'Injured' | 'Doubtful';
-  age?: number;
   height?: string;
   weight?: string;
   preferredFoot?: 'Right' | 'Left' | 'Both';
   nationality?: string;
   bio?: string;
   goalsConceded?: number;
+  cupGoalsConceded?: number;
+  ownedByCount?: number;
+  captainedByCount?: number;
+  matchesPlayed?: number;
+  appearances?: number;
+  cupMatchesPlayed?: number;
 }
 
 export interface FixtureChatMessage {
@@ -170,6 +184,8 @@ export interface LineupPlayer {
   position: TacticalPositionTag | PlayerPosition | string;
   isCaptain?: boolean;
   rating?: number;
+  minutesPlayed?: number;
+  subbedOn?: boolean;
 }
 
 export interface MatchLineup {
@@ -211,6 +227,8 @@ export interface Match {
   secondHalfStoppage?: number;
   date: string;
   time: string;
+  kickoffTime?: string | number | null;
+  isDelayed?: boolean;
   venue: string;
   matchday: number;
   competition_type?: CompetitionType;
@@ -230,6 +248,15 @@ export interface Match {
   events?: MatchEvent[];
   ratings?: Record<string, number>; // playerId -> rating out of 10
   stats?: MatchStats;
+  isStatsCommitted?: boolean;
+  homeVotes?: number;
+  awayVotes?: number;
+  drawVotes?: number;
+}
+
+export interface SquadPlayerItem {
+  playerId: string;
+  purchasePrice: number;
 }
 
 export interface FantasySquad {
@@ -243,6 +270,8 @@ export interface FantasySquad {
   startingPlayerIds?: string[];
   benchPlayerIds?: string[];
   playerIds: string[];
+  squadPlayers?: SquadPlayerItem[];
+  playerPurchasePrices?: Record<string, number>;
   savedBaselinePlayerIds?: string[];
   transfersMade?: number;
   freeTransfers?: number;
@@ -308,6 +337,7 @@ export interface NewsArticle {
   author: string;
   authorAvatar?: string;
   authorTitle?: string;
+  customReporterRole?: string;
   category: string;
   readTime?: string;
   issueLabel?: string;
@@ -318,6 +348,7 @@ export interface NewsArticle {
   status?: 'draft' | 'pending_approval' | 'published';
   authorRole?: string;
   authorEmail?: string;
+  authorId?: string;
   comments?: ArticleComment[];
 }
 
@@ -366,17 +397,61 @@ export interface EplHighlight {
   authorEmail?: string;
 }
 
+export interface ScorePredictionRecord {
+  id: string;
+  userId: string;
+  matchId: string;
+  homeScore: number;
+  awayScore: number;
+  userEmail?: string;
+  userName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PredictionBreakdown {
+  matchId: string;
+  homeTeamName: string;
+  awayTeamName: string;
+  matchStatus: string;
+  predictedHomeScore: number;
+  predictedAwayScore: number;
+  actualHomeScore?: number;
+  actualAwayScore?: number;
+  pointsEarned: number;
+  reason: 'exact_score' | 'correct_winner' | 'correct_goals' | 'participated' | 'pending';
+}
+
+export interface PredictorLeaderboardEntry {
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  avatarUrl?: string;
+  totalPoints: number;
+  exactScoresCount: number; // 5pts
+  correctWinnersCount: number; // 3pts
+  correctGoalsCount: number; // 2pts
+  participationsCount: number; // 1pt
+  totalPredictions: number;
+  rank?: number;
+  breakdown?: PredictionBreakdown[];
+}
+
 export interface MatchVideo {
   id: string;
-  embed_url: string;
-  thumbnail_url: string;
-  source_platform: 'TikTok' | 'YouTube' | 'X/Twitter' | 'Instagram' | 'Other';
   title: string;
+  embed_url: string;
   description?: string;
-  created_at: string;
+  thumbnail_url?: string;
+  source_platform?: string;
+  match_id?: string;
+  created_at?: string;
+  views_count?: number;
+  likes_count?: number;
   likesCount?: number;
   author?: string;
   authorRole?: string;
   authorEmail?: string;
 }
+
 

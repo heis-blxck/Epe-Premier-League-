@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useBackHandler } from '../utils/backManager';
+import { useURLModal } from '../hooks/useURLModal';
+
 import {
   Match, Team, Player, MatchPeriod, EventType, GoalType, MatchEvent, LineupPlayer, AdminUser, AppSettings, MatchStats, NewsArticle } from '../types';
 import { api } from '../services/api';
@@ -12,10 +13,12 @@ import { PlayerAvailabilityManager } from './PlayerAvailabilityManager';
 import { AdsManager } from './AdsManager';
 import { PotmManager } from './PotmManager';
 import { PlayerValuationManager } from './PlayerValuationManager';
+import { FplFinalizerManager } from './FplFinalizerManager';
 import { LineupBuilder } from './LineupBuilder';
 import { VerifiedBadge } from './VerifiedBadge';
 import { EplHighlightAdmin } from './EplHighlightAdmin';
 import { VideoHighlightsAdmin } from './VideoHighlightsAdmin';
+import { TeamLogo } from './TeamLogo';
 import {
   Trophy,
   ShieldAlert,
@@ -90,6 +93,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   settings,
   onUpdateSettings
 }) => {
+  const enrichedMatches = matches.map(m => ({
+    ...m,
+    homeTeam: m.homeTeam || teams.find(t => t.id === m.homeTeamId),
+    awayTeam: m.awayTeam || teams.find(t => t.id === m.awayTeamId),
+  }));
+
   const [activePanel, setActivePanel] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [adminTab, setAdminTab] = useState<'controller' | 'events' | 'ratings' | 'squads' | 'transfers' | 'players' | 'teams' | 'standings' | 'branding' | 'news' | 'highlights' | 'videos' | 'admins' | 'fixtures' | 'bulk_upload' | 'bulk_teams' | 'valuations' | 'availability' | 'ads' | 'potm' | 'lineups'>('controller');
 
@@ -116,8 +125,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [isNewsReporter, isOfficialLeague, isSubAdmin, isSuperAdmin, adminTab]);
 
   // Selected Match for actions
-  const [selectedMatchId, setSelectedMatchId] = useState<string>(matches[0]?.id || '');
-  const selectedMatch = matches.find(m => m.id === selectedMatchId) || matches[0];
+  const [selectedMatchId, setSelectedMatchId] = useState<string>(enrichedMatches[0]?.id || '');
+  const selectedMatch = enrichedMatches.find(m => m.id === selectedMatchId) || enrichedMatches[0];
 
   // Feedback Toast
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -170,8 +179,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const liveClock = useMatchClock(selectedMatch);
 
   // Sync state when selected match changes
+  const prevMatchIdRef = useRef<string | null>(null);
+  
   useEffect(() => {
-    if (selectedMatch) {
+    if (selectedMatch && selectedMatch.id !== prevMatchIdRef.current) {
+      prevMatchIdRef.current = selectedMatch.id;
       setClockMinute(liveClock.calculatedMinute || selectedMatch.matchMinute || 0);
       setStoppage1st(selectedMatch.firstHalfStoppage ?? selectedMatch.stoppageTime1stHalf ?? 2);
       setStoppage2nd(selectedMatch.secondHalfStoppage ?? selectedMatch.stoppageTime2ndHalf ?? 4);
@@ -209,15 +221,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [selectedMatchId, matches]);
 
   // QUICK GOAL INSTANT TRIGGER STATES
-  const [quickGoalModalOpen, setQuickGoalModalOpen] = useState<boolean>(false);
-  const [quickGoalData, setQuickGoalData] = useState<{
-    side: 'home' | 'away';
-    teamId: string;
-    teamName: string;
-    newHomeScore: number;
-    newAwayScore: number;
-    minute: number;
-  } | null>(null);
+  const { isOpen: quickGoalModalOpen, closeModal: closeQuickGoalModal, openModal: openQuickGoalModal, modalData: quickGoalData } = useURLModal<{ side: 'home' | 'away'; teamId: string; teamName: string; newHomeScore: number; newAwayScore: number; matchId: string; }>('adminQuickGoal');
 
   const [quickGoalPlayerId, setQuickGoalPlayerId] = useState<string>('');
   const [quickGoalAssisterId, setQuickGoalAssisterId] = useState<string>('');
@@ -226,7 +230,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [quickGoalSavingDetails, setQuickGoalSavingDetails] = useState<boolean>(false);
 
   // 2. LIVE EVENT LOGGER STATES
-  const [eventModalOpen, setEventModalOpen] = useState<boolean>(false);
+  const { isOpen: eventModalOpen, closeModal: closeEventModal, openModal: openEventModal } = useURLModal('adminEventLog');
   const [eventTypeToLog, setEventTypeToLog] = useState<EventType>('Goal');
   const [goalTypeToLog, setGoalTypeToLog] = useState<GoalType>('standard');
   const [eventTeamId, setEventTeamId] = useState<string>(selectedMatch?.homeTeamId || '');
@@ -306,8 +310,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 8. BRANDING & SETTINGS STATES (SUPER ADMIN)
   const [brandAppName, setBrandAppName] = useState<string>(settings?.appName || 'Epe Premier League');
   const [brandLogoUrl, setBrandLogoUrl] = useState<string>(settings?.appLogoUrl || '');
+  const [sponsorLogoUrl, setSponsorLogoUrl] = useState<string>(settings?.sponsor_logo_url || settings?.sponsorLogoUrl || '');
   const [brandColor, setBrandColor] = useState<string>(settings?.primaryColor || '#800020');
-  const [brandSeason, setBrandSeason] = useState<string>(settings?.seasonLabel || '2026 Season');
+  const [brandSeason, setBrandSeason] = useState<string>(settings?.leagueSeason || '2026 Season');
   const [visionText, setVisionText] = useState<string>(settings?.visionText || '');
   const [leadership, setLeadership] = useState<{name: string, role: string, imageUrl: string}[]>(
     settings?.leadership || [
@@ -317,10 +322,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ]
   );
 
+  const prevSettingsIdRef = useRef<boolean>(false);
   useEffect(() => {
-    if (settings) {
+    if (settings && !prevSettingsIdRef.current) {
+      prevSettingsIdRef.current = true;
       setBrandAppName(settings.appName);
       setBrandLogoUrl(settings.appLogoUrl);
+      if (settings.sponsor_logo_url !== undefined || settings.sponsorLogoUrl !== undefined) {
+        setSponsorLogoUrl(settings.sponsor_logo_url || settings.sponsorLogoUrl || '');
+      }
       setBrandColor(settings.primaryColor);
       setBrandSeason(settings.seasonLabel || settings.leagueSeason || '2026 Season');
       if (settings.visionText) setVisionText(settings.visionText);
@@ -331,21 +341,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 9. SUBSTACK NEWS PUBLISHER STATES
   const [editingNewsId, setEditingNewsId] = useState<string | null>(null);
 
-  useBackHandler(() => {
-    if (editingPlayerId) {
-      setEditingPlayerId(null);
-      return true;
-    }
-    if (editingTeamId) {
-      setEditingTeamId(null);
-      return true;
-    }
-    if (editingNewsId) {
-      setEditingNewsId(null);
-      return true;
-    }
-    return false;
-  }, [editingPlayerId, editingTeamId, editingNewsId]);
+  
   const [newsFilter, setNewsFilter] = useState<'all' | 'pending' | 'published' | 'draft'>('all');
   const [newsTitle, setNewsTitle] = useState<string>('');
   const [newsSubtitle, setNewsSubtitle] = useState<string>('');
@@ -357,6 +353,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newsReadTime, setNewsReadTime] = useState<string>('3 min read');
   const [newsAuthor, setNewsAuthor] = useState<string>('Segun Samson');
   const [newsAuthorTitle, setNewsAuthorTitle] = useState<string>('Senior Football Writer');
+  const [newsCustomReporterRole, setNewsCustomReporterRole] = useState<string>('');
   const [newsAuthorAvatar, setNewsAuthorAvatar] = useState<string>('https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80');
   const [newsIsSubstackExclusive, setNewsIsSubstackExclusive] = useState<boolean>(false);
   const [newsFeatured, setNewsFeatured] = useState<boolean>(true);
@@ -369,6 +366,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // 11. DATA RESET CONFIRMATION STATES (SUPER ADMIN EXCLUSIVE)
   const [resetTableConfirming, setResetTableConfirming] = useState<boolean>(false);
+  const [isResettingFantasy, setIsResettingFantasy] = useState<'confirming' | 'wiping' | false>(false);
 
   // 11. FIXTURES & BULK MATCH SCHEDULER STATES (FOR ALL ADMINS)
   const [fixtureFormHomeTeam, setFixtureFormHomeTeam] = useState<string>(teams[0]?.id || '');
@@ -406,6 +404,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }>>([]);
   const [isUploadingBulk, setIsUploadingBulk] = useState<boolean>(false);
   const [deletingMatchIdConfirm, setDeletingMatchIdConfirm] = useState<string | null>(null);
+  const [deletingNewsIdConfirm, setDeletingNewsIdConfirm] = useState<string | null>(null);
   const [fixtureFilterMatchday, setFixtureFilterMatchday] = useState<string>('all');
 
   // CSV/JSON Parser for Bulk Fixture Upload
@@ -552,9 +551,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleCopySampleCsv = () => {
     const sample = `Matchday,HomeTeam,AwayTeam,Date,Time,Venue
-1,${teams[0]?.name || 'Lagos City FC'},${teams[1]?.name || 'Epe Warriors'},2026-08-15,16:00,Epe Township Stadium
-1,${teams[2]?.name || 'Ikorodu United'},${teams[3]?.name || 'Badagry Stars'},2026-08-15,18:30,Ikorodu Township Stadium
-2,${teams[1]?.name || 'Epe Warriors'},${teams[2]?.name || 'Ikorodu United'},2026-08-22,16:00,Epe Township Stadium`;
+1,${teams[0]?.name || 'Team A'},${teams[1]?.name || 'Team B'},2026-08-15,16:00,Epe Township Stadium
+1,${teams[2]?.name || 'Team C'},${teams[3]?.name || 'Team D'},2026-08-15,18:30,Epe Township Stadium
+2,${teams[1]?.name || 'Team B'},${teams[2]?.name || 'Team C'},2026-08-22,16:00,Epe Township Stadium`;
     
     navigator.clipboard.writeText(sample);
     setBulkCsvText(sample);
@@ -576,6 +575,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSavingFixture(true);
     try {
       const homeT = teams.find(t => t.id === fixtureFormHomeTeam);
+      
+
       await api.saveMatch({
         homeTeamId: fixtureFormHomeTeam,
         awayTeamId: fixtureFormAwayTeam,
@@ -662,11 +663,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Helper when selecting match
   const handleSelectMatch = (mId: string) => {
     setSelectedMatchId(mId);
-    const m = matches.find(match => match.id === mId);
+    const m = enrichedMatches.find(match => match.id === mId);
     if (m) {
       setClockMinute(m.matchMinute);
       setEventTeamId(m.homeTeamId);
       setRatingsState(m.ratings || {});
+    }
+  };
+
+  // HANDLE DELAY TOGGLE
+  const handleToggleMatchDelay = async () => {
+    if (!selectedMatch) return;
+    const newDelayed = !selectedMatch.isDelayed;
+    try {
+      await api.saveMatch({
+        id: selectedMatch.id,
+        isDelayed: newDelayed
+      });
+      showToast(newDelayed ? 'Match marked as DELAYED (Amber badge shown to fans)' : 'Match delay cleared.');
+      onRefreshAll();
+    } catch (e: any) {
+      showToast(`Error toggling delay: ${e.message}`);
     }
   };
 
@@ -675,6 +692,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!selectedMatch) return;
     const nowIso = new Date().toISOString();
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         status: 'Live',
@@ -694,6 +713,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleEnd1stHalf = async () => {
     if (!selectedMatch) return;
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         status: 'Half-Time',
@@ -711,6 +732,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!selectedMatch) return;
     const nowIso = new Date().toISOString();
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         status: 'Live',
@@ -730,6 +753,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleEndMatch = async () => {
     if (!selectedMatch) return;
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         status: 'Full-Time',
@@ -746,6 +771,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSet1stHalfExtraTime = async () => {
     if (!selectedMatch) return;
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         firstHalfStoppage: Number(stoppage1st),
@@ -761,6 +788,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSet2ndHalfExtraTime = async () => {
     if (!selectedMatch) return;
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         secondHalfStoppage: Number(stoppage2nd),
@@ -784,6 +813,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         motmPlayerId,
@@ -810,6 +841,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSavePenalties = async () => {
     if (!selectedMatch) return;
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         status: 'Penalties',
@@ -827,6 +860,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSyncClock = async () => {
     if (!selectedMatch) return;
     try {
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         matchMinute: Number(clockMinute)
@@ -853,6 +888,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       // 1. INSTANT DB & SCORE UPDATE IN FIRESTORE / BACKEND
+      
+
       await api.saveMatch({
         id: selectedMatch.id,
         homeScore: newHome,
@@ -878,7 +915,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       onRefreshAll();
 
       // 2. OPEN PROMPT FOR GOALSCORER & ASSIST DETAILS
-      setQuickGoalData({
+      openQuickGoalModal({
         side,
         teamId,
         teamName,
@@ -890,7 +927,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setQuickGoalAssisterId('');
       setQuickGoalType('standard');
       setQuickGoalMinute(min);
-      setQuickGoalModalOpen(true);
+      
     } catch (err: any) {
       showToast(`Error updating score: ${err.message || 'Failed to update live score'}`);
     }
@@ -901,9 +938,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!selectedMatch || !quickGoalData) return;
     setQuickGoalSavingDetails(true);
     try {
-      const teamPlayers = players.filter(p => p.teamId === quickGoalData.teamId);
-      const scorerObj = teamPlayers.find(p => p.id === quickGoalPlayerId);
-      const assisterObj = teamPlayers.find(p => p.id === quickGoalAssisterId);
+      const scorerObj = players.find(p => String(p.id) === String(quickGoalPlayerId));
+      const assisterObj = players.find(p => String(p.id) === String(quickGoalAssisterId));
 
       const scorerName = scorerObj ? scorerObj.name : 'Goalscorer';
       const assisterName = assisterObj ? assisterObj.name : undefined;
@@ -935,9 +971,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       showToast(`Goal details saved for ${scorerName}! Player stats updated.`);
-      setQuickGoalModalOpen(false);
-      setQuickGoalData(null);
       onRefreshAll();
+      closeQuickGoalModal();
     } catch (err: any) {
       showToast(`Error logging goal details: ${err.message}`);
     } finally {
@@ -968,6 +1003,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         motmPlayerId: motmPlayerId || undefined,
         manOfTheMatchPlayerId: motmPlayerId || undefined,
         motmGraphicUrl: motmGraphicUrl || undefined,
+        isStatsCommitted: true,
         bonusPointsAllocations: {
           firstPlacePlayerId: bonusFirstPlace || undefined,
           secondPlacePlayerId: bonusSecondPlace || undefined,
@@ -999,7 +1035,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setEventAssisterId('');
     setEventSubInPlayerId('');
     setEventDetail('');
-    setEventModalOpen(true);
+    openEventModal();
   };
 
   // SUBMIT MATCH EVENT
@@ -1011,16 +1047,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     const currentTeamId = eventTeamId || selectedMatch.homeTeamId;
-    const teamPlayers = players.filter(p => p.teamId === currentTeamId);
     let mainPlayerName = '';
+    let finalPlayerId = eventPlayerId;
 
-    if (eventPlayerId) {
-      const p = teamPlayers.find(pl => pl.id === eventPlayerId) || players.find(pl => pl.id === eventPlayerId);
+    if (finalPlayerId) {
+      const p = players.find(pl => String(pl.id) === String(finalPlayerId));
       if (p) mainPlayerName = p.name;
     }
 
     if (!mainPlayerName && eventCustomPlayerName.trim()) {
-      mainPlayerName = eventCustomPlayerName.trim();
+      const searchName = eventCustomPlayerName.trim().toLowerCase();
+      const matchByName = players.find(p => p.name.trim().toLowerCase() === searchName);
+      if (matchByName) {
+        finalPlayerId = matchByName.id;
+        mainPlayerName = matchByName.name;
+      } else {
+        mainPlayerName = eventCustomPlayerName.trim();
+      }
     }
 
     if (!mainPlayerName) {
@@ -1028,18 +1071,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
-    const assister = teamPlayers.find(p => p.id === eventAssisterId) || players.find(p => p.id === eventAssisterId);
-    const subInPlayer = teamPlayers.find(p => p.id === eventSubInPlayerId) || players.find(p => p.id === eventSubInPlayerId);
+    const assister = players.find(p => String(p.id) === String(eventAssisterId));
+    const subInPlayer = players.find(p => String(p.id) === String(eventSubInPlayerId));
+
+    let normalizedEventType = eventTypeToLog;
+    let normalizedGoalType = goalTypeToLog;
+
+    if (eventTypeToLog === 'Penalty Goal') {
+      normalizedEventType = 'Goal';
+      normalizedGoalType = 'penalty';
+    } else if (eventTypeToLog === 'Own Goal') {
+      normalizedEventType = 'Goal';
+      normalizedGoalType = 'own_goal';
+    }
 
     try {
       await api.addEvent(selectedMatch.id, {
         teamId: currentTeamId,
-        playerId: eventPlayerId || `custom-${Date.now()}`,
+        playerId: finalPlayerId || mainPlayerName,
         playerName: mainPlayerName,
-        eventType: eventTypeToLog,
-        goalType: eventTypeToLog === 'Goal' ? goalTypeToLog : undefined,
+        eventType: normalizedEventType,
+        goalType: normalizedEventType === 'Goal' ? normalizedGoalType : undefined,
         minute: Number(eventMinute || clockMinute || 1),
-        detail: eventDetail,
+        detail: eventDetail || (normalizedGoalType === 'penalty' ? 'Penalty Goal' : normalizedGoalType === 'own_goal' ? 'Own Goal' : undefined),
         assisterId: eventAssisterId || undefined,
         assisterName: assister?.name || undefined,
         subInPlayerId: eventSubInPlayerId || undefined,
@@ -1047,13 +1101,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
 
       showToast(`⚽ ${eventTypeToLog} logged at ${eventMinute}'! Leaderboards & standings auto-updated.`);
-      setEventModalOpen(false);
       setEventPlayerId('');
       setEventCustomPlayerName('');
       setEventAssisterId('');
       setEventSubInPlayerId('');
       setEventDetail('');
       onRefreshAll();
+      closeEventModal();
     } catch (err: any) {
       showToast(`Error logging event: ${err.message}`);
     }
@@ -1095,7 +1149,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSavingPlayer(true);
     try {
       const pData: Partial<Player> = {
-        id: editingPlayerId || undefined,
         name: playerFormName.trim(),
         teamId: targetTeamId,
         position: playerFormPos,
@@ -1107,8 +1160,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         bio: playerFormBio || ''
       };
 
-      await api.savePlayer(pData);
-      showToast(editingPlayerId ? 'Player profile updated!' : 'New player added to team roster!');
+      if (editingPlayerId) {
+        pData.id = editingPlayerId;
+        await api.savePlayer(pData);
+        showToast('Player profile updated!');
+      } else {
+        await api.savePlayer(pData);
+        showToast('New player added to team roster!');
+      }
+
       setEditingPlayerId(null);
       setPlayerFormName('');
       setPlayerFormShirt(10);
@@ -1117,7 +1177,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setPlayerFormBio('');
       onRefreshAll();
     } catch (err: any) {
-      showToast(`Error saving player: ${err.message || 'Failed to save player profile'}`);
+      console.error(err);
+      showToast(err.message || 'Failed to save player profile');
     } finally {
       setIsSavingPlayer(false);
     }
@@ -1163,17 +1224,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsSavingTeam(true);
     try {
-      await api.saveTeam({
-        id: editingTeamId || undefined,
+      const tData = {
         name: teamFormName.trim(),
         shortName: teamFormShort.trim() || teamFormName.trim().slice(0, 3).toUpperCase(),
         logoUrl: teamFormLogo || 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=120&q=80',
         coach: teamFormCoach.trim() || 'Head Coach',
         coachPhotoUrl: teamFormCoachPhotoUrl.trim() || undefined,
         stadium: teamFormStadium.trim() || 'Epe Arena'
-      });
+      };
 
-      showToast(editingTeamId ? 'Team info updated!' : 'New team registered successfully!');
+      if (editingTeamId) {
+        const fullData = { ...tData, id: editingTeamId };
+        await api.saveTeam(fullData);
+        showToast('Team info updated!');
+      } else {
+        await api.saveTeam(tData);
+        showToast('New team registered successfully!');
+      }
+
       setEditingTeamId(null);
       setTeamFormName('');
       setTeamFormShort('');
@@ -1183,7 +1251,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setTeamFormStadium('');
       onRefreshAll();
     } catch (err: any) {
-      showToast(`Error saving team: ${err.message || 'Failed to save team'}`);
+      console.error(err);
+      showToast(err.message || 'Failed to save team');
     } finally {
       setIsSavingTeam(false);
     }
@@ -1214,8 +1283,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       await onUpdateSettings({
         appName: brandAppName,
         appLogoUrl: brandLogoUrl,
+        sponsor_logo_url: sponsorLogoUrl,
+        sponsorLogoUrl: sponsorLogoUrl,
         primaryColor: brandColor,
-        seasonLabel: brandSeason,
+        leagueSeason: brandSeason,
         visionText: visionText,
         leadership: leadership
       });
@@ -1231,7 +1302,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       
       {/* FIXED BOTTOM NAV FOR ADMIN */}
       <div 
-        className="fixed bottom-0 left-0 right-0 w-full z-[9999] bg-[#800020] border-t border-[#5a0016] shadow-[0_-10px_30px_-10px_rgba(128,0,32,0.4)] pb-safe m-0"
+        className="fixed bottom-0 left-0 right-0 w-full z-[9999] bg-[#800020] border-t border-[#9a3412] shadow-[0_-10px_30px_-10px_rgba(128,0,32,0.4)] pb-safe m-0"
         style={{ position: 'fixed', bottom: 0, left: 0, right: 0, width: '100%', zIndex: 9999, margin: 0 }}
       >
         <div className="flex items-center justify-around max-w-lg mx-auto py-2 px-2">
@@ -1239,14 +1310,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <>
               <button
                 onClick={() => { setActivePanel(1); setAdminTab('fixtures'); }}
-                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 1 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 1 ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
               >
                 <Play className={`transition-all ${activePanel === 1 ? 'w-6 h-6' : 'w-5 h-5'}`} />
                 <span className={`font-bold tracking-wide transition-all ${activePanel === 1 ? 'text-[11px]' : 'text-[10px]'}`}>Matches</span>
               </button>
               <button
                 onClick={() => { setActivePanel(2); setAdminTab('standings'); }}
-                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 2 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 2 ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
               >
                 <Shield className={`transition-all ${activePanel === 2 ? 'w-6 h-6' : 'w-5 h-5'}`} />
                 <span className={`font-bold tracking-wide transition-all ${activePanel === 2 ? 'text-[11px]' : 'text-[10px]'}`}>Clubs</span>
@@ -1257,14 +1328,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setAdminTab('players'); 
                   window.dispatchEvent(new Event('reset-profile-tab'));
                 }}
-                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 3 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 3 ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
               >
                 <Users className={`transition-all ${activePanel === 3 ? 'w-6 h-6' : 'w-5 h-5'}`} />
                 <span className={`font-bold tracking-wide transition-all ${activePanel === 3 ? 'text-[11px]' : 'text-[10px]'}`}>Profiles</span>
               </button>
               <button
                 onClick={() => { setActivePanel(4); setAdminTab('valuations'); }}
-                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 4 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 4 ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
               >
                 <Sparkles className={`transition-all ${activePanel === 4 ? 'w-6 h-6' : 'w-5 h-5'}`} />
                 <span className={`font-bold tracking-wide transition-all ${activePanel === 4 ? 'text-[11px]' : 'text-[10px]'}`}>Fantasy</span>
@@ -1273,7 +1344,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
           <button
             onClick={() => { setActivePanel(5); setAdminTab('news'); }}
-            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 5 ? 'text-[#800020] bg-amber-400 scale-110 shadow-lg' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+            className={`flex flex-col items-center justify-center gap-1 min-w-0 flex-1 py-1.5 px-3 rounded-2xl cursor-pointer transition-all duration-300 ${activePanel === 5 ? 'text-[#800020] bg-[#FBB931] scale-110 shadow-lg font-black' : 'text-white/80 hover:text-white hover:bg-white/10'}`}
           >
             <Sliders className={`transition-all ${activePanel === 5 ? 'w-6 h-6' : 'w-5 h-5'}`} />
             <span className={`font-bold tracking-wide transition-all ${activePanel === 5 ? 'text-[11px]' : 'text-[10px]'}`}>Controls</span>
@@ -1323,15 +1394,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {isSuperAdmin && (
           <div className="flex flex-wrap items-center gap-2">
+            {isResettingFantasy === 'confirming' ? (
+              <div className="flex items-center gap-2 bg-rose-950 p-2 rounded-xl border border-rose-700">
+                <span className="text-[11px] font-bold text-rose-200 px-1">Wipe fantasy test data?</span>
+                <button
+                  onClick={async () => {
+                    setIsResettingFantasy('wiping');
+                    try {
+                      const res = await fetch('/api/admin/reset-fantasy-test', { method: 'POST' });
+                      if (res.ok) {
+                        showToast('Test Data Wiped! Refreshing...');
+                        setTimeout(() => window.location.reload(), 1500);
+                      } else {
+                        const errData = await res.json().catch(() => ({}));
+                        showToast(errData.error || 'Error resetting data');
+                        setIsResettingFantasy(false);
+                      }
+                    } catch (e: any) {
+                      showToast(e.message || 'Error resetting data');
+                      setIsResettingFantasy(false);
+                    } finally {
+                      if (isResettingFantasy !== 'wiping') setIsResettingFantasy(false);
+                    }
+                  }}
+                  className="bg-rose-600 hover:bg-rose-500 text-white font-black text-xs px-3 py-1.5 rounded-lg cursor-pointer"
+                >
+                  Yes, Wipe
+                </button>
+                <button
+                  onClick={() => setIsResettingFantasy(false)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs px-3 py-1.5 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : isResettingFantasy === 'wiping' ? (
+              <button disabled className="bg-rose-950 text-rose-400 font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 opacity-70">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Wiping...
+              </button>
+            ) : (
+              <button
+                onClick={() => setIsResettingFantasy('confirming')}
+                className="bg-rose-600 hover:bg-rose-500 text-white font-black text-xs px-3.5 py-2 rounded-xl shadow-[0_0_15px_rgba(225,29,72,0.5)] flex items-center gap-1.5 cursor-pointer animate-pulse border-2 border-rose-400"
+              >
+                <Trash2 className="w-4 h-4" />
+                RESET FANTASY TEST DATA
+              </button>
+            )}
+            
             {resetTableConfirming ? (
               <div className="flex items-center gap-2 bg-rose-950 p-2 rounded-xl border border-rose-700">
                 <span className="text-[11px] font-bold text-amber-300 px-1">Reset all table standings & stats to ZERO?</span>
                 <button
                   onClick={async () => {
-                    await api.resetTableZero();
-                    showToast('All league table data, scores & stats reset to ZERO!');
-                    setResetTableConfirming(false);
-                    onRefreshAll();
+                    try {
+                      await api.resetTableZero();
+                      showToast('All league table data, scores & stats reset to ZERO!');
+                      setResetTableConfirming(false);
+                      onRefreshAll();
+                    } catch (err: any) {
+                      showToast(err.message || 'Failed to reset table data');
+                    }
                   }}
                   className="bg-rose-600 hover:bg-rose-500 text-white font-black text-xs px-3 py-1.5 rounded-lg cursor-pointer"
                 >
@@ -1349,10 +1473,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-[11px] font-bold text-rose-200 px-1">Reset full database seed?</span>
                 <button
                   onClick={async () => {
-                    await api.resetDemo();
-                    showToast('Database reset to initial factory seed!');
-                    setResetConfirming(false);
-                    onRefreshAll();
+                    try {
+                      await api.resetDemo();
+                      showToast('Database reset to initial factory seed!');
+                      setResetConfirming(false);
+                      onRefreshAll();
+                    } catch (err: any) {
+                      showToast(err.message || 'Failed to reset database seed');
+                    }
                   }}
                   className="bg-rose-600 hover:bg-rose-500 text-white font-black text-xs px-3 py-1.5 rounded-lg cursor-pointer"
                 >
@@ -1508,6 +1636,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <>
                     <option value="valuations">Player Valuations</option>
                     <option value="availability">Player Availability</option>
+                    <option value="fpl_finalizer">FPL Engine & Gameweek Finalizer</option>
                   </>
                 )}
                 {activePanel === 5 && (
@@ -1532,7 +1661,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onChange={(e) => handleSelectMatch(e.target.value)}
                 className="bg-slate-950 border border-slate-800 font-bold text-slate-100 rounded-xl px-3 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-[#800020] flex-1 sm:max-w-xs"
               >
-                {matches.map(m => (
+                {enrichedMatches.map(m => (
                   <option key={m.id} value={m.id}>
                     [{m.status}] M{m.matchday}: {m.homeTeam?.name} vs {m.awayTeam?.name} ({m.homeScore}-{m.awayScore})
                   </option>
@@ -1608,6 +1737,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </span>
               )}
             </div>
+          </div>
+
+          {/* MANUAL DELAY OVERRIDE CONTROL */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-slate-950 p-4 rounded-2xl border border-amber-500/30 gap-3">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+              <div>
+                <h4 className="text-xs font-black text-slate-100 uppercase tracking-wide">Manual Match Delay Override</h4>
+                <p className="text-[11px] text-slate-400">Force display "KICKOFF DELAYED • STAY TUNED" badge to fans on match center</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleMatchDelay}
+              className={`w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer border flex items-center justify-center gap-1.5 ${
+                selectedMatch.isDelayed
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg'
+                  : 'bg-slate-900 text-amber-400 border-amber-500/40 hover:bg-slate-800'
+              }`}
+            >
+              {selectedMatch.isDelayed ? '⚡ CLEAR DELAY' : '⚠️ MARK MATCH AS DELAYED'}
+            </button>
           </div>
 
           {/* 40-MINUTE HALVES MATCH STATE CONTROLS */}
@@ -2398,9 +2549,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={async () => {
-                      await api.deleteEvent(selectedMatch.id, evt.id);
-                      showToast('Event removed & match recalculated');
-                      onRefreshAll();
+                      try {
+                        await api.deleteEvent(selectedMatch.id, evt.id);
+                        showToast('Event removed & match recalculated');
+                        onRefreshAll();
+                      } catch (err: any) {
+                        showToast(err.message || 'Failed to remove event');
+                      }
                     }}
                     className="text-rose-400 hover:text-rose-200 p-1 cursor-pointer"
                     title="Remove Event"
@@ -3421,7 +3576,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 setEditingPlayerId(p.id);
                                 setPlayerFormName(p.name);
                                 setPlayerFormTeamId(p.teamId);
-                                setPlayerFormPos(p.position);
+                                setPlayerFormPos(normalizePosition(p.position));
                                 setPlayerFormShirt(p.shirtNumber || 10);
                                 setPlayerFormPhoto(p.photoUrl || '');
                                 setPlayerFormHeight(p.height || '180 cm');
@@ -3531,14 +3686,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase mb-2">
-                  Primary Theme Color
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1">
+                  Powered By Sponsor Logo (`sponsor_logo_url`)
                 </label>
-                <div className="flex items-center gap-3">
+                <p className="text-[11px] text-slate-400 mb-2">
+                  Upload or paste the URL path for the official sponsor's logo displayed on the sticky "Powered By" banner.
+                </p>
+                <MediaUploader
+                  currentUrl={sponsorLogoUrl}
+                  onSelectUrl={(url) => setSponsorLogoUrl(url)}
+                  label="Upload Sponsor Logo"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-2">
+                  Official Brand & Primary Color
+                </label>
+                <div className="flex flex-wrap items-center gap-3">
                   {[
-                    { label: 'Burgundy Maroon', hex: '#800020' },
+                    { label: 'Sunset Orange (Official)', hex: '#800020' },
+                    { label: 'Sunset Amber', hex: '#881337' },
+                    { label: 'Sunset Gold', hex: '#FBB931' },
                     { label: 'Royal Navy', hex: '#1e3a8a' },
-                    { label: 'Deep Gold', hex: '#b45309' },
                     { label: 'Emerald Green', hex: '#065f46' }
                   ].map(c => (
                     <button
@@ -3704,6 +3874,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               const finalAuthor = isOfficialLeague ? 'EPL Official' : (newsAuthor || currentAdmin?.name || 'Segun Samson');
               const finalAuthorTitle = isOfficialLeague ? '' : (newsAuthorTitle || 'Senior Football Writer');
 
+              const activeUid = currentAdmin?.id || currentUserEmail;
+              const activeRole = isSuperAdmin ? 'SUPER_ADMIN' : (currentAdmin?.role || (isOfficialLeague ? 'official_league' : 'news_reporter'));
+
               const saved = await api.saveNews({
                 ...(editingNewsId ? { id: editingNewsId } : {}),
                 title: newsTitle,
@@ -3716,13 +3889,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 readTime: newsReadTime || '3 min read',
                 author: finalAuthor,
                 authorTitle: finalAuthorTitle,
+                customReporterRole: isOfficialLeague ? 'Football Association' : (newsCustomReporterRole || 'Reporter'),
                 authorAvatar: newsAuthorAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
                 isSubstackExclusive: newsIsSubstackExclusive,
                 featured: newsFeatured,
                 status: defaultStatus,
                 isPublished: defaultPublished,
                 authorRole: isOfficialLeague ? 'official_league' : (currentAdmin?.role || 'news_reporter'),
-                authorEmail: currentUserEmail
+                authorEmail: currentUserEmail,
+                authorId: activeUid,
+                currentUserUid: activeUid,
+                currentUserRole: activeRole,
+                currentUserEmail: currentUserEmail
               });
 
               showToast(editingNewsId ? 'Article updated and published live!' : 'Article published live to news feed!');
@@ -3835,6 +4013,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) => setNewsAuthorTitle(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-amber-300 uppercase mb-1">Custom Author Role</label>
+                {isOfficialLeague ? (
+                  <div className="w-full bg-slate-950/90 border border-amber-500/50 rounded-xl px-3 py-2 text-xs font-black text-amber-300 flex items-center justify-between opacity-70">
+                    <span>Football Association</span>
+                    <span className="text-[10px] text-amber-400/80 uppercase font-mono tracking-wide flex items-center gap-1"><Lock className="w-3 h-3" /> Locked</span>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    placeholder="e.g. Pundit, EPL Insider, Blogger (Defaults to 'Reporter')"
+                    value={newsCustomReporterRole}
+                    onChange={(e) => setNewsCustomReporterRole(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100"
+                  />
+                )}
               </div>
 
               <div>
@@ -3979,6 +4174,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   const isLive = item.status === 'published' || item.isPublished;
                   const isPending = item.status === 'pending_approval' || (!item.isPublished && item.status !== 'draft');
 
+                  const activeUserUid = currentAdmin?.id || currentUserEmail;
+                  const isSuperAdminUser = isSuperAdmin || currentAdmin?.role === 'super_admin' || currentAdmin?.role === 'SUPER_ADMIN';
+
+                  // Strict Document-Level Ownership Check:
+                  // Only SUPER_ADMIN or the document's original author (matching authorId or authorEmail) can edit/delete
+                  const isAuthor = Boolean(
+                    (item.authorId && (item.authorId === activeUserUid || item.authorId === currentAdmin?.id || item.authorId === currentUserEmail)) ||
+                    (item.authorEmail && item.authorEmail === currentUserEmail)
+                  );
+
+                  const canEditOrDeleteNews = isSuperAdminUser || isAuthor;
+
                   return (
                     <div
                       key={item.id}
@@ -4083,8 +4290,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </>
                         )}
 
-                        {/* EDIT BUTTON */}
-                        {(isSuperAdmin || isOfficialLeague || item.authorEmail === currentUserEmail || (currentAdmin?.role === 'news_reporter' && item.authorEmail === currentUserEmail)) && (
+                        {/* EDIT BUTTON (SUPER_ADMIN OR DOCUMENT AUTHOR) */}
+                        {canEditOrDeleteNews && (
                         <button
                           type="button"
                           onClick={() => {
@@ -4111,26 +4318,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </button>
                         )}
 
-                        {/* DELETE BUTTON (SUPER ADMIN, OFFICIAL LEAGUE, OR AUTHOR) */}
-                        {(isSuperAdmin || isOfficialLeague || item.authorEmail === currentUserEmail || (currentAdmin?.role === 'news_reporter' && item.authorEmail === currentUserEmail)) && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (confirm(`Are you sure you want to delete publication "${item.title}"?`)) {
-                                try {
-                                  await api.deleteNews(item.id);
-                                  showToast('Publication deleted successfully!');
-                                  onRefreshAll();
-                                } catch (err: any) {
-                                  showToast(err.message);
-                                }
-                              }
-                            }}
-                            className="bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-800 p-2 rounded-xl cursor-pointer"
-                            title="Delete Publication"
-                          >
-                            <Trash2 className="w-4 h-4 text-rose-400" />
-                          </button>
+                        {/* DELETE BUTTON (SUPER_ADMIN OR DOCUMENT AUTHOR) */}
+                        {canEditOrDeleteNews && (
+                          <>
+                            {deletingNewsIdConfirm === item.id ? (
+                              <div className="flex items-center gap-1.5 bg-rose-950 p-1.5 rounded-xl border border-rose-800">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await api.deleteNews(item.id, {
+                                        uid: activeUserUid,
+                                        role: isSuperAdminUser ? 'SUPER_ADMIN' : (currentAdmin?.role || 'LEAGUE_OFFICIAL'),
+                                        email: currentUserEmail
+                                      });
+                                      showToast('Publication deleted successfully!');
+                                      setDeletingNewsIdConfirm(null);
+                                      onRefreshAll();
+                                    } catch (err: any) {
+                                      showToast(err.message);
+                                    }
+                                  }}
+                                  className="bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-black px-2.5 py-1 rounded-lg cursor-pointer"
+                                >
+                                  Confirm Delete
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingNewsIdConfirm(null)}
+                                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold px-2.5 py-1 rounded-lg cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingNewsIdConfirm(item.id)}
+                                className="bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-800 p-2 rounded-xl cursor-pointer"
+                                title="Delete Publication"
+                              >
+                                <Trash2 className="w-4 h-4 text-rose-400" />
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>
@@ -4307,8 +4538,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <button
                         onClick={async () => {
                           if (confirm(`Dismiss ${adm.email}?`)) {
-                            await onDismissAdmin(adm.email);
-                            showToast(`Dismissed ${adm.email}`);
+                            try {
+                              await onDismissAdmin(adm.email);
+                              showToast(`Dismissed ${adm.email}`);
+                            } catch (err: any) {
+                              showToast(err.message || 'Failed to dismiss admin');
+                            }
                           }
                         }}
                         className="bg-rose-950 text-rose-200 border border-rose-800 px-3 py-1.5 rounded-xl text-xs cursor-pointer"
@@ -4772,7 +5007,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </label>
                     <textarea
                       rows={5}
-                      placeholder={`Matchday,HomeTeam,AwayTeam,Date,Time,Venue\n1,Lagos City FC,Epe Warriors,2026-08-15,16:00,Epe Township Stadium\n1,Ikorodu United,Badagry Stars,2026-08-15,18:30,Ikorodu Township Stadium`}
+                      placeholder={`Matchday,HomeTeam,AwayTeam,Date,Time,Venue\n1,Team A,Team B,2026-08-15,16:00,Epe Township Stadium\n1,Team C,Team D,2026-08-15,18:30,Epe Township Stadium`}
                       value={bulkCsvText}
                       onChange={(e) => handleParseCsv(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:ring-2 focus:ring-amber-400"
@@ -4856,7 +5091,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="space-y-4 pt-4 border-t border-slate-800">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <h4 className="text-sm font-black text-amber-300 uppercase tracking-wider flex items-center gap-2">
-                <span>All Scheduled League Fixtures ({matches.length})</span>
+                <span>All Scheduled League Fixtures ({enrichedMatches.length})</span>
               </h4>
 
               {/* Matchday Filter */}
@@ -4868,7 +5103,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-200"
                 >
                   <option value="all">All Matchdays</option>
-                  {Array.from(new Set(matches.map(m => Number(m.matchday || 1)))).sort((a: number, b: number) => a - b).map(md => (
+                  {Array.from(new Set(enrichedMatches.map(m => Number(m.matchday || 1)))).sort((a: number, b: number) => a - b).map(md => (
                     <option key={md} value={String(md)}>Matchday {md}</option>
                   ))}
                 </select>
@@ -4892,7 +5127,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     <div className="flex items-center justify-between gap-2 py-1">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
-                        {m.homeTeam?.logoUrl && <img src={m.homeTeam.logoUrl} alt="" className="w-5 h-5 object-contain" />}
+                        <TeamLogo team={m.homeTeam} className="w-5 h-5" />
                         <span className="font-extrabold text-xs text-slate-100 truncate">{m.homeTeam?.name || 'Home Team'}</span>
                       </div>
                       <span className="font-black text-amber-300 font-mono text-sm px-1.5">
@@ -4900,7 +5135,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </span>
                       <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
                         <span className="font-extrabold text-xs text-slate-100 truncate text-right">{m.awayTeam?.name || 'Away Team'}</span>
-                        {m.awayTeam?.logoUrl && <img src={m.awayTeam.logoUrl} alt="" className="w-5 h-5 object-contain" />}
+                        <TeamLogo team={m.awayTeam} className="w-5 h-5" />
                       </div>
                     </div>
 
@@ -5001,6 +5236,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         />
       )}
 
+      {/* FPL ENGINE & GAMEWEEK FINALIZER */}
+      {adminTab === 'fpl_finalizer' && (
+        <FplFinalizerManager />
+      )}
       {/* QUICK GOAL FOLLOW-UP DETAILS MODAL */}
       {quickGoalModalOpen && quickGoalData && selectedMatch && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -5022,8 +5261,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setQuickGoalModalOpen(false);
-                  setQuickGoalData(null);
+                  closeQuickGoalModal();
+                  openQuickGoalModal(null);
                 }}
                 className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer font-bold text-sm"
               >
@@ -5049,10 +5288,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="">-- Select Goal Scorer --</option>
                   {players
-                    .filter(p => p.teamId === quickGoalData.teamId)
+                    .filter(p => quickGoalType === 'own_goal' ? true : String(p.teamId) === String(quickGoalData.teamId))
                     .map(p => (
                       <option key={p.id} value={p.id}>
-                        #{p.shirtNumber} {p.name} ({p.position})
+                        #{p.shirtNumber} {p.name} ({p.position}) {String(p.teamId) !== String(quickGoalData.teamId) ? ' (Opponent)' : ''}
                       </option>
                     ))}
                 </select>
@@ -5070,7 +5309,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="">-- Unassisted / No Assist --</option>
                   {players
-                    .filter(p => p.teamId === quickGoalData.teamId && p.id !== quickGoalPlayerId)
+                    .filter(p => String(p.teamId) === String(quickGoalData.teamId) && String(p.id) !== String(quickGoalPlayerId))
                     .map(p => (
                       <option key={p.id} value={p.id}>
                         #{p.shirtNumber} {p.name} ({p.position})
@@ -5119,8 +5358,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  setQuickGoalModalOpen(false);
-                  setQuickGoalData(null);
+                  closeQuickGoalModal();
+                  openQuickGoalModal(null);
                 }}
                 className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer"
               >
@@ -5164,7 +5403,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <button
-                onClick={() => setEventModalOpen(false)}
+                onClick={() => closeEventModal()}
                 className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer font-black text-sm"
               >
                 ✕
@@ -5192,7 +5431,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
                     }`}
                   >
-                    <img src={selectedMatch.homeTeam?.logoUrl} alt="" className="w-5 h-5 object-contain" />
+                    <TeamLogo team={selectedMatch.homeTeam} className="w-5 h-5" />
                     <span>{selectedMatch.homeTeam?.name}</span>
                   </button>
 
@@ -5210,7 +5449,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
                     }`}
                   >
-                    <img src={selectedMatch.awayTeam?.logoUrl} alt="" className="w-5 h-5 object-contain" />
+                    <TeamLogo team={selectedMatch.awayTeam} className="w-5 h-5" />
                     <span>{selectedMatch.awayTeam?.name}</span>
                   </button>
                 </div>
@@ -5228,10 +5467,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <option value="">-- Choose Team Player --</option>
                   {players
-                    .filter(p => p.teamId === (eventTeamId || selectedMatch.homeTeamId))
+                    .filter(p => eventTypeToLog === 'Own Goal' ? true : String(p.teamId) === String(eventTeamId || selectedMatch.homeTeamId))
                     .map(p => (
                       <option key={p.id} value={p.id}>
-                        #{p.shirtNumber} {p.name} ({p.position})
+                        #{p.shirtNumber} {p.name} ({p.position}) {String(p.teamId) !== String(eventTeamId || selectedMatch.homeTeamId) ? ' (Opponent)' : ''}
                       </option>
                     ))}
                 </select>
@@ -5393,7 +5632,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setEventModalOpen(false)}
+                  onClick={() => closeEventModal()}
                   className="w-1/3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-xl text-xs cursor-pointer"
                 >
                   Cancel

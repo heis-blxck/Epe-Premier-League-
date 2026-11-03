@@ -1,21 +1,25 @@
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useURLModal } from '../hooks/useURLModal';
 import React, { useState, useEffect } from 'react';
-import { useBackHandler } from '../utils/backManager';
+
 import { Match, MatchEvent, FixtureChatMessage, UserAccount } from '../types';
 import { Pitch2D } from './Pitch2D';
-import { PlayerProfileModal } from './PlayerProfileModal';
+
 import { Player, Team } from '../types';
 import { MatchPredictionWidget } from './MatchPredictionWidget';
-import { X, Clock, Award, Star, Activity, ArrowRightLeft, ShieldAlert, ArrowLeft } from 'lucide-react';
+import { X, Clock, Award, Star, Activity, ArrowRightLeft, ShieldAlert, ArrowLeft, Flame, Sparkles } from 'lucide-react';
 import { useMatchClock, formatMatchDisplayTime } from '../utils/matchClock';
+import { MatchCountdown } from './MatchCountdown';
 import { api } from '../services/api';
+import { TeamLogo } from './TeamLogo';
+import { GoalAnimationOverlay, GoalAlertData } from './GoalAnimationOverlay';
 
 interface MatchDetailModalProps {
-  match: Match;
+  matches: Match[];
   players?: Player[];
   teams?: Team[];
   isAdmin?: boolean;
   currentUser?: UserAccount | null;
-  onClose: () => void;
 }
 
 interface MatchEventRowProps {
@@ -30,15 +34,16 @@ const MatchEventRow: React.FC<MatchEventRowProps> = ({ evt, isHomeEvent, getPlay
   const assisterName = evt.assisterName || (evt.assisterId ? getPlayerName(evt.assisterId) : null);
 
   const renderIcon = () => {
-    if (evt.eventType === 'Goal') {
-      if (evt.goalType === 'penalty') return <span title="Penalty Goal" className="text-base sm:text-lg select-none">🎯</span>;
-      if (evt.goalType === 'own_goal') return <span title="Own Goal" className="text-base sm:text-lg select-none">🔴⚽</span>;
+    const typeStr = String(evt.eventType || '');
+    if (typeStr === 'Goal' || typeStr === 'Penalty Goal' || typeStr === 'Own Goal' || typeStr === 'penalty') {
+      if (evt.goalType === 'penalty' || typeStr === 'Penalty Goal') return <span title="Penalty Goal" className="text-base sm:text-lg select-none">🎯</span>;
+      if (evt.goalType === 'own_goal' || typeStr === 'Own Goal') return <span title="Own Goal" className="text-base sm:text-lg select-none">🔴⚽</span>;
       return <span title="Goal" className="text-base sm:text-lg select-none">⚽</span>;
     }
-    if (evt.eventType === 'penalty_miss') return <span title="Penalty Miss" className="text-base sm:text-lg select-none">❌</span>;
-    if (evt.eventType === 'Yellow Card') return <span title="Yellow Card" className="text-base sm:text-lg select-none">🟨</span>;
-    if (evt.eventType === 'Red Card') return <span title="Red Card" className="text-base sm:text-lg select-none">🟥</span>;
-    if (evt.eventType === 'Sub') return <span title="Substitution" className="text-base sm:text-lg select-none">🔄</span>;
+    if (typeStr === 'penalty_miss') return <span title="Penalty Miss" className="text-base sm:text-lg select-none">❌</span>;
+    if (typeStr === 'Yellow Card') return <span title="Yellow Card" className="text-base sm:text-lg select-none">🟨</span>;
+    if (typeStr === 'Red Card') return <span title="Red Card" className="text-base sm:text-lg select-none">🟥</span>;
+    if (typeStr === 'Sub') return <span title="Substitution" className="text-base sm:text-lg select-none">🔄</span>;
     return <span className="text-base sm:text-lg select-none">⏱️</span>;
   };
 
@@ -120,9 +125,24 @@ const MatchEventRow: React.FC<MatchEventRowProps> = ({ evt, isHomeEvent, getPlay
   );
 };
 
-export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, players = [], teams = [], isAdmin = false, currentUser = null, onClose }) => {
-  const [selectedProfilePlayer, setSelectedProfilePlayer] = useState<Player | null>(null);
-  const [activeTab, setActiveTab] = useState<'timeline' | 'lineups' | 'stats' | 'chat'>('timeline');
+export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ matches, players = [], teams = [], isAdmin = false, currentUser = null }) => {
+  const { isOpen, closeModal, modalData } = useURLModal<{ matchId: string, stage?: 'timeline' | 'lineups' | 'stats' | 'chat' }>('matchDetail');
+  const match = matches.find(m => m.id === modalData?.matchId);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [activeTab, setActiveTabState] = useState<'timeline' | 'lineups' | 'stats' | 'chat'>(modalData?.stage || 'timeline');
+  
+  useEffect(() => {
+    if (modalData?.stage) {
+      setActiveTabState(modalData.stage);
+    } else {
+      setActiveTabState('timeline');
+    }
+  }, [modalData?.matchId, modalData?.stage]);
+
+  const setActiveTab = (tab: any) => {
+    setActiveTabState(tab);
+  };
   const [selectedTeamLineup, setSelectedTeamLineup] = useState<'home' | 'away'>('home');
 
   const [chatMessages, setChatMessages] = useState<FixtureChatMessage[]>([]);
@@ -135,17 +155,94 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
     if (currentUser?.name) {
       setUsernameInput(currentUser.name);
     }
-  }, [currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.name]);
 
   const [sendingChat, setSendingChat] = useState(false);
 
-  useBackHandler(() => {
-    if (selectedProfilePlayer) {
-      setSelectedProfilePlayer(null);
-      return true;
+  // Live Goal Animation Tracking
+  const [goalAlert, setGoalAlert] = useState<GoalAlertData | null>(null);
+  const prevHomeScoreRef = React.useRef<number | undefined>(match?.homeScore);
+  const prevAwayScoreRef = React.useRef<number | undefined>(match?.awayScore);
+  const prevEventsCountRef = React.useRef<number>(match?.events?.length || 0);
+
+  useEffect(() => {
+    if (!match) return;
+
+    const currentHomeScore = Number(match.homeScore) || 0;
+    const currentAwayScore = Number(match.awayScore) || 0;
+    const currentEvents = match.events || [];
+
+    // Initialize refs if undefined
+    if (prevHomeScoreRef.current === undefined) {
+      prevHomeScoreRef.current = currentHomeScore;
+      prevAwayScoreRef.current = currentAwayScore;
+      prevEventsCountRef.current = currentEvents.length;
+      return;
     }
-    return false;
-  }, [selectedProfilePlayer]);
+
+    const homeIncreased = currentHomeScore > prevHomeScoreRef.current;
+    const awayIncreased = currentAwayScore > prevAwayScoreRef.current;
+
+    if (homeIncreased || awayIncreased) {
+      // Goal detected! Find the latest goal event if possible
+      const scoringSide: 'home' | 'away' = homeIncreased ? 'home' : 'away';
+      const scoringTeam = scoringSide === 'home' ? (match.homeTeam || null) : (match.awayTeam || null);
+      const opponentTeam = scoringSide === 'home' ? (match.awayTeam || null) : (match.homeTeam || null);
+
+      // Look for latest goal event
+      const goalEvents = currentEvents.filter(e => {
+        const typeStr = String(e.eventType || '');
+        return typeStr === 'Goal' || typeStr === 'Penalty Goal' || typeStr === 'Own Goal' || typeStr === 'penalty';
+      });
+
+      const latestGoal = goalEvents.length > 0 ? goalEvents[goalEvents.length - 1] : null;
+      let scorerName = latestGoal ? (latestGoal.playerName || getPlayerName(latestGoal.playerId)) : `${scoringTeam?.name || 'Striker'} Scorer`;
+      let assisterName = latestGoal?.assisterName || (latestGoal?.assisterId ? getPlayerName(latestGoal.assisterId) : undefined);
+      let minute = latestGoal?.minute || match.matchMinute || 45;
+
+      setGoalAlert({
+        id: `goal-${Date.now()}`,
+        scoringTeam,
+        opponentTeam,
+        side: scoringSide,
+        scorerName,
+        assisterName,
+        minute,
+        newHomeScore: currentHomeScore,
+        newAwayScore: currentAwayScore,
+        goalType: latestGoal?.goalType || 'standard',
+        matchTitle: `${match.homeTeam?.name || 'Home'} vs ${match.awayTeam?.name || 'Away'}`
+      });
+    }
+
+    prevHomeScoreRef.current = currentHomeScore;
+    prevAwayScoreRef.current = currentAwayScore;
+    prevEventsCountRef.current = currentEvents.length;
+  }, [match?.homeScore, match?.awayScore, match?.events, match?.id]);
+
+  // Demo Goal Trigger for testing/previewing animation anytime
+  const handleTriggerDemoGoal = (side: 'home' | 'away' = 'home') => {
+    if (!match) return;
+    const scoringTeam = side === 'home' ? (match.homeTeam || null) : (match.awayTeam || null);
+    const opponentTeam = side === 'home' ? (match.awayTeam || null) : (match.homeTeam || null);
+    const simHome = side === 'home' ? (match.homeScore || 0) + 1 : (match.homeScore || 0);
+    const simAway = side === 'away' ? (match.awayScore || 0) + 1 : (match.awayScore || 0);
+
+    setGoalAlert({
+      id: `demo-goal-${Date.now()}`,
+      scoringTeam,
+      opponentTeam,
+      side,
+      scorerName: side === 'home' ? (match.homeTeam?.name ? `${match.homeTeam.name} Star` : 'Home Striker') : (match.awayTeam?.name ? `${match.awayTeam.name} Star` : 'Away Striker'),
+      assisterName: 'Playmaker #10',
+      minute: match.matchMinute || Math.floor(Math.random() * 80) + 10,
+      newHomeScore: simHome,
+      newAwayScore: simAway,
+      goalType: 'standard',
+      matchTitle: `${match.homeTeam?.name} vs ${match.awayTeam?.name}`
+    });
+  };
 
   const longPressTimerRef = React.useRef<any>(null);
 
@@ -219,14 +316,14 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
     }
   };
 
-  const isLive = match.status === 'Live';
-  const isFullTime = match.status === 'Full-Time';
+  const isLive = match?.status === 'Live';
+  const isFullTime = match?.status === 'Full-Time';
 
   // Man of the Match
-  let motmPlayerId: string | null = match.motmPlayerId || null;
-  let highestRating = match.motmPlayerId && match.ratings ? Number(match.ratings[match.motmPlayerId]) || 0 : 0;
+  let motmPlayerId: string | null = match?.motmPlayerId || null;
+  let highestRating = match?.motmPlayerId && match?.ratings ? Number(match.ratings[match.motmPlayerId]) || 0 : 0;
   
-  if (!motmPlayerId && match.ratings) {
+  if (!motmPlayerId && match?.ratings) {
     Object.entries(match.ratings).forEach(([pId, rating]) => {
       const numRating = typeof rating === 'number' ? rating : Number(rating);
       if (numRating > highestRating) {
@@ -238,10 +335,10 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
 
   // Combine player names from lineups
   const allLineupPlayers = [
-    ...(match.homeLineup?.startingXI || []),
-    ...(match.homeLineup?.substitutes || []),
-    ...(match.awayLineup?.startingXI || []),
-    ...(match.awayLineup?.substitutes || [])
+    ...(match?.homeLineup?.startingXI || []),
+    ...(match?.homeLineup?.substitutes || []),
+    ...(match?.awayLineup?.startingXI || []),
+    ...(match?.awayLineup?.substitutes || [])
   ];
 
   const getPlayerName = (pId: string, fallback?: string) => {
@@ -249,7 +346,9 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
     return found ? found.name : (fallback || 'Player');
   };
 
-  const clock = useMatchClock(match);
+  const clock = useMatchClock(match as any);
+
+  if (!isOpen || !match) return null;
 
   return (
     <div className="fixed inset-0 z-50 w-full h-full min-h-screen bg-slate-950 text-slate-100 flex flex-col overflow-y-auto pt-safe pb-safe px-safe ios-scroll animate-in fade-in duration-200">
@@ -258,7 +357,7 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
         {/* Top Sticky Navigation Header Bar */}
         <div className="sticky top-0 z-30 bg-slate-950/95 backdrop-blur-md px-4 py-3 border-b border-slate-800 flex items-center justify-between shadow-md">
           <button
-            onClick={onClose}
+            onClick={() => closeModal()}
             className="flex items-center gap-2 text-xs font-bold text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-800 transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -288,11 +387,7 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
                   <span className="font-extrabold text-xs sm:text-lg text-white text-right truncate">
                     {match.homeTeam?.name}
                   </span>
-                  <img
-                    src={match.homeTeam?.logoUrl}
-                    alt={match.homeTeam?.name}
-                    className="w-10 h-10 sm:w-16 sm:h-16 rounded-full object-cover border-2 border-white/20 shadow-lg bg-white/10 shrink-0"
-                  />
+                  <TeamLogo team={match.homeTeam} className="w-10 h-10 sm:w-16 sm:h-16" />
                 </div>
 
                 {/* Score Center Box (Single Line) */}
@@ -304,11 +399,7 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
 
                 {/* Away Team (Logo + Left-aligned text) */}
                 <div className="flex items-center gap-2 sm:gap-3 flex-1 justify-start min-w-0">
-                  <img
-                    src={match.awayTeam?.logoUrl}
-                    alt={match.awayTeam?.name}
-                    className="w-10 h-10 sm:w-16 sm:h-16 rounded-full object-cover border-2 border-white/20 shadow-lg bg-white/10 shrink-0"
-                  />
+                  <TeamLogo team={match.awayTeam} className="w-10 h-10 sm:w-16 sm:h-16" />
                   <span className="font-extrabold text-xs sm:text-lg text-white text-left truncate">
                     {match.awayTeam?.name}
                   </span>
@@ -320,11 +411,25 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
                 <span className="text-[11px] sm:text-xs text-rose-200/90 font-medium flex items-center gap-1">
                   📍 {match.venue || 'Epe Township Stadium'}
                 </span>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs sm:text-sm font-black px-3.5 py-1 rounded-full shadow-md flex items-center gap-1.5 border ${clock.badgeColor}`}>
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>{clock.displayString} {clock.overflowText ? `(${clock.overflowText})` : ''}</span>
-                  </span>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {clock.isLive || match.status === 'Full-Time' || match.period === 'Full-Time' ? (
+                    <span className={`text-xs sm:text-sm font-black px-3.5 py-1 rounded-full shadow-md flex items-center gap-1.5 border ${clock.badgeColor}`}>
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>{clock.displayString} {clock.overflowText ? `(${clock.overflowText})` : ''}</span>
+                    </span>
+                  ) : (
+                    <MatchCountdown match={match} />
+                  )}
+
+                  {/* Goal Celebration Animation Trigger (For previewing and live excitement) */}
+                  <button
+                    onClick={() => handleTriggerDemoGoal('home')}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-gradient-to-r from-[#800020] to-[#881337] text-white hover:brightness-110 shadow-sm border border-amber-300/30 transition-transform active:scale-95 cursor-pointer"
+                    title="Preview Goal celebration animation"
+                  >
+                    <Flame className="w-3 h-3 text-amber-200 animate-pulse" />
+                    <span>Goal Replay</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -413,7 +518,7 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
                 {/* Header Team Labels */}
                 <div className="flex items-center justify-between px-3.5 py-2 bg-slate-950/90 rounded-2xl border border-slate-800 text-xs font-black uppercase tracking-wider text-slate-300 shadow-sm">
                   <div className="flex items-center gap-2 min-w-0">
-                    <img src={match.homeTeam?.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+                    <TeamLogo team={match.homeTeam} className="w-5 h-5" />
                     <span className="text-amber-300 truncate">{match.homeTeam?.name}</span>
                   </div>
                   <span className="text-[10px] text-amber-400 font-mono bg-amber-400/10 px-2.5 py-0.5 rounded-full border border-amber-400/20 shrink-0 mx-2">
@@ -421,7 +526,7 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
                   </span>
                   <div className="flex items-center gap-2 min-w-0 justify-end">
                     <span className="text-slate-300 truncate">{match.awayTeam?.name}</span>
-                    <img src={match.awayTeam?.logoUrl} alt="" className="w-5 h-5 rounded-full object-cover shrink-0" />
+                    <TeamLogo team={match.awayTeam} className="w-5 h-5" />
                   </div>
                 </div>
 
@@ -497,9 +602,9 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
                 const targetId = (p as any).playerId || p.id;
                 const fullP = players?.find(x => x.id === targetId || (x.name && p.name && x.name.toLowerCase() === p.name.toLowerCase()));
                 if (fullP) {
-                  setSelectedProfilePlayer(fullP);
+                  navigate(`?modal=playerProfile&playerId=${fullP.id}`);
                 } else if ('goals' in p) {
-                  setSelectedProfilePlayer(p as Player);
+                  navigate(`?modal=playerProfile&playerId=${(p as Player).id}`);
                 }
               }}
             />
@@ -663,13 +768,13 @@ export const MatchDetailModal: React.FC<MatchDetailModalProps> = ({ match, playe
           )}
         </div>
       </div>
-      {selectedProfilePlayer && (
-        <PlayerProfileModal 
-          player={selectedProfilePlayer} 
-          team={teams.find(t => t.id === selectedProfilePlayer.teamId)} 
-          onClose={() => setSelectedProfilePlayer(null)} 
-        />
-      )}
+
+      {/* Goal Flash Celebration Overlay */}
+      <GoalAnimationOverlay
+        goalAlert={goalAlert}
+        onDismiss={() => setGoalAlert(null)}
+      />
+      
     </div>
   );
 };

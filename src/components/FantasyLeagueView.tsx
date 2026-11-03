@@ -1,11 +1,16 @@
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useURLModal } from '../hooks/useURLModal';
+import { FantasyOnboardingWizard } from './FantasyOnboardingWizard';
 import React, { useState, useEffect } from 'react';
-import { useBackHandler } from '../utils/backManager';
-import { PlayerProfileModal } from './PlayerProfileModal';
+
+
 import { ManagerSquadModal } from './ManagerSquadModal';
 import { MasterLeaderboardWidget } from './MasterLeaderboardWidget';
+import { SponsorshipBanner } from './SponsorshipBanner';
 import { Player, Team, Match, FantasySquad, MiniLeague, UserAccount, ManagerChips } from '../types';
 import { calculatePlayerLivePoints } from '../utils/fantasyEngine';
 import { api } from '../services/api';
+
 import { 
   Trophy, Star, Shield, Users, Crown, Plus, Copy, Check, Sparkles, 
   UserCheck, Flame, ChevronRight, Award, AlertTriangle, Info, Shirt, 
@@ -32,22 +37,19 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
   onUpdateProfile,
   onExit
 }) => {
-  const [activeTab, setActiveTab] = useState<'my_team' | 'transfers' | 'leaderboard' | 'mini_leagues' | 'insights' | 'hero_cards'>('my_team');
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = (searchParams.get('fTab') as 'my_team' | 'transfers' | 'leaderboard' | 'mini_leagues' | 'insights' | 'hero_cards') || 'my_team';
+  const setActiveTab = (tab: string) => {
+    const params = new URLSearchParams(searchParams);
+    params.set('fTab', tab);
+    navigate(`?${params.toString()}`, { replace: true });
+  };
   const [heroFilter, setHeroFilter] = useState<'overall' | 'FWD' | 'MID' | 'DEF' | 'GK'>('overall');
-  const [selectedProfilePlayer, setSelectedProfilePlayer] = useState<Player | null>(null);
-  const [selectedManagerSquad, setSelectedManagerSquad] = useState<FantasySquad | null>(null);
+  
+  const { openModal: openManagerSquadModal } = useURLModal<{ squadId: string }>('managerSquad');
 
-  useBackHandler(() => {
-    if (selectedProfilePlayer) {
-      setSelectedProfilePlayer(null);
-      return true;
-    }
-    if (selectedManagerSquad) {
-      setSelectedManagerSquad(null);
-      return true;
-    }
-    return false;
-  }, [selectedProfilePlayer, selectedManagerSquad]);
+  
 
 
   // Fantasy Registration Gate State for users without a squad
@@ -61,6 +63,8 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [teamNameError, setTeamNameError] = useState<string | null>(null);
   const [isRegistering, setIsRegistering] = useState<boolean>(false);
+  const [showResetSquadModal, setShowResetSquadModal] = useState(false);
+  const [isResettingSquad, setIsResettingSquad] = useState(false);
 
   // Fantasy Squad State
   const [squadName, setSquadName] = useState(`${currentUser.name}'s XI`);
@@ -70,6 +74,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
   const [viceCaptainId, setViceCaptainId] = useState<string>('');
   const [mySquad, setMySquad] = useState<FantasySquad | null>(null);
   const [allSquads, setAllSquads] = useState<FantasySquad[]>([]);
+  const [purchasePricesMap, setPurchasePricesMap] = useState<Record<string, number>>({});
 
   // Interactive Swap State for Pitch
   const [swapSourceId, setSwapSourceId] = useState<string | null>(null);
@@ -202,6 +207,22 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         const pIds = foundMySquad.playerIds || [];
         setSelectedPlayerIds(pIds);
 
+        const initialPricesMap: Record<string, number> = {};
+        if (foundMySquad.squadPlayers && Array.isArray(foundMySquad.squadPlayers)) {
+          foundMySquad.squadPlayers.forEach(sp => {
+            initialPricesMap[sp.playerId] = sp.purchasePrice;
+          });
+        } else if (foundMySquad.playerPurchasePrices) {
+          Object.assign(initialPricesMap, foundMySquad.playerPurchasePrices);
+        }
+        pIds.forEach(id => {
+          if (initialPricesMap[id] === undefined) {
+            const p = players.find(x => x.id === id);
+            initialPricesMap[id] = p ? (p.currentPrice || p.price || 6.0) : 6.0;
+          }
+        });
+        setPurchasePricesMap(initialPricesMap);
+
         const starters = foundMySquad.startingPlayerIds && foundMySquad.startingPlayerIds.length === 11
           ? foundMySquad.startingPlayerIds
           : pIds.slice(0, 11);
@@ -209,10 +230,11 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         setStartingPlayerIds(starters);
         setCaptainId(foundMySquad.captainPlayerId || starters[0] || '');
         setViceCaptainId(foundMySquad.viceCaptainPlayerId || starters[1] || '');
-      } else if (currentUser.fantasyTeamName && currentUser.fantasyTeamName.trim()) {
-        // Fallback: User already has a registered Fantasy Team Name in profile
-        setHasConfirmedParticipation(true);
-        setSquadName(currentUser.fantasyTeamName.trim());
+      } else if (currentUser.fantasyTeamName || (currentUser as any).hasFantasyTeam || (currentUser as any).fantasySquadId) {
+        // Fallback: The squad was deleted from the database, reset local UI state only (no background write on load)
+        setMySquad(null);
+        setHasConfirmedParticipation(false);
+        setSquadName('');
       }
     } catch (err) {
       console.warn('Error loading fantasy data:', err);
@@ -291,6 +313,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
 
       // 3. Immediately create and persist Fantasy Squad in DB
       const managerName = currentUser.name || currentUser.email.split('@')[0];
+      const purchaseData = getSquadPurchaseData();
       const savedSquad = await api.saveFantasySquad({
         userId: currentUser.id || currentUser.email,
         userEmail: currentUser.email,
@@ -300,7 +323,8 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         startingPlayerIds: startingPlayerIds.length > 0 ? startingPlayerIds : [],
         benchPlayerIds: [],
         captainPlayerId: captainId || '',
-        viceCaptainPlayerId: viceCaptainId || ''
+        viceCaptainPlayerId: viceCaptainId || '',
+        ...purchaseData
       });
 
       setMySquad(savedSquad);
@@ -315,9 +339,40 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
     }
   };
 
+  const handleResetSquad = async () => {
+    if (!mySquad) {
+      onShowToast('Error: No squad found to delete.');
+      return;
+    }
+    setIsResettingSquad(true);
+    try {
+      await api.resetMySquad(mySquad.id || 'unknown', currentUser.id);
+      
+      if (onUpdateProfile) {
+        await onUpdateProfile({
+          email: currentUser.email,
+          fantasyTeamName: ''
+        });
+      }
+
+      // Update local state instantly for immediate feedback
+      setMySquad(null);
+      setHasConfirmedParticipation(false);
+      setSquadName(`${currentUser.name}'s XI`);
+      setShowResetSquadModal(false);
+      onShowToast('Fantasy Team permanently deleted.');
+      
+      setTimeout(() => window.location.reload(), 800);
+    } catch (err: any) {
+      onShowToast(err.message || 'Error deleting squad');
+      setIsResettingSquad(false);
+    }
+  };
+
   useEffect(() => {
     loadFantasyData();
-  }, [currentUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.email]);
 
   // Derived squad statistics & position lists
   const selectedPlayers = selectedPlayerIds.map(id => players.find(p => p.id === id)).filter(Boolean) as Player[];
@@ -334,7 +389,28 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
   const extraTransfers = isWildcardActive ? 0 : Math.max(0, transfersCount - 2);
   const costOfChanges = extraTransfers * 4; // -4 points deduction per trade exceeding 2
 
-  const totalCost = selectedPlayers.reduce((sum, p) => sum + (p.price || 6.0), 0);
+  const getSquadPurchaseData = () => {
+    const squadPlayers = selectedPlayerIds.map(id => {
+      const p = players.find(x => x.id === id);
+      const curPrice = p ? (p.currentPrice || p.price || 6.0) : 6.0;
+      const buyPrice = purchasePricesMap[id] ?? curPrice;
+      return { playerId: id, purchasePrice: buyPrice };
+    });
+    const playerPurchasePrices = selectedPlayerIds.reduce((acc, id) => {
+      const p = players.find(x => x.id === id);
+      const curPrice = p ? (p.currentPrice || p.price || 6.0) : 6.0;
+      acc[id] = purchasePricesMap[id] ?? curPrice;
+      return acc;
+    }, {} as Record<string, number>);
+    return { squadPlayers, playerPurchasePrices };
+  };
+
+  const totalCost = selectedPlayerIds.reduce((sum, id) => {
+    const p = players.find(x => x.id === id);
+    const curPrice = p ? (p.currentPrice || p.price || 6.0) : 6.0;
+    const buyPrice = purchasePricesMap[id] ?? curPrice;
+    return sum + buyPrice;
+  }, 0);
   const remainingBudget = Number((100.0 - totalCost).toFixed(1));
 
   // Starting XI and Bench decomposition
@@ -368,6 +444,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
   const isFormationValid = 
     starterGK.length === 1 &&
     starterDEF.length >= 3 && starterDEF.length <= 5 &&
+    starterMID.length >= 2 && starterMID.length <= 5 &&
     starterFWD.length >= 1 && starterFWD.length <= 3 &&
     startingPlayers.length === 11;
 
@@ -433,6 +510,16 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
     }
     if (newDEF > 5) {
       onShowToast('Invalid Formation: Maximum 5 Defenders allowed.');
+      setSwapSourceId(null);
+      return;
+    }
+    if (newMID < 2) {
+      onShowToast('Invalid Formation: Minimum 2 Midfielders required.');
+      setSwapSourceId(null);
+      return;
+    }
+    if (newMID > 5) {
+      onShowToast('Invalid Formation: Maximum 5 Midfielders allowed.');
       setSwapSourceId(null);
       return;
     }
@@ -537,6 +624,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         setChips(updatedChips);
       }
 
+      const purchaseData = getSquadPurchaseData();
       const saved = await api.saveFantasySquad({
         userId: currentUser.id || currentUser.email,
         userEmail: currentUser.email,
@@ -547,7 +635,8 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         startingPlayerIds: startingPlayerIds,
         benchPlayerIds: benchPlayerIds,
         playerIds: selectedPlayerIds,
-        activeChip: activeChipThisGW
+        activeChip: activeChipThisGW,
+        ...purchaseData
       });
       setMySquad(saved);
       onShowToast('Starting XI, Formation & Chips Saved Successfully! 🌟');
@@ -559,7 +648,15 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
     }
   };
 
-  // 5. Transfer Market Buy / Sell Actions
+  // 5. Transfer Market Buy / Sell Actions & Max 3 Per Club Validation
+  const isValidClubLimit = (currentSquadPlayers: Player[], candidatePlayer: Player, replacingId?: string | null): boolean => {
+    const activeSquad = replacingId
+      ? currentSquadPlayers.filter(p => p.id !== replacingId)
+      : currentSquadPlayers;
+    const count = activeSquad.filter(p => p.teamId === candidatePlayer.teamId).length;
+    return count < 3;
+  };
+
   const handleBuyPlayer = (player: Player) => {
     if (isGameweekLocked) {
       onShowToast('🔒 Gameweek In Progress - Team Changes Locked.');
@@ -569,33 +666,47 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
       onShowToast(`${player.name} is already in your squad.`);
       return;
     }
-    if (selectedPlayerIds.length >= 18) {
+    if (selectedPlayerIds.length >= 18 && !replacingPlayerId) {
       onShowToast('Squad is full (18 players max). Transfer out a player first.');
       return;
     }
 
-    const newTotalCost = totalCost + (player.price || 6.0);
+    const playerCurrentPrice = player.currentPrice || player.price || 6.0;
+    const buyPrice = purchasePricesMap[player.id] ?? playerCurrentPrice;
+    const newTotalCost = totalCost + buyPrice;
     if (newTotalCost > 100.0) {
-      onShowToast(`Budget Exceeded! Buying ${player.name} (₦${player.price || 6.0}M) exceeds remaining budget.`);
+      onShowToast(`Budget Exceeded! Buying ${player.name} (₦${buyPrice.toFixed(1)}M) exceeds remaining budget.`);
+      return;
+    }
+
+    const squadAfterReplace = replacingPlayerId
+      ? selectedPlayers.filter(p => p.id !== replacingPlayerId)
+      : selectedPlayers;
+
+    // MAX 3 PER CLUB RULE ENFORCEMENT
+    if (!isValidClubLimit(selectedPlayers, player, replacingPlayerId)) {
+      const teamObj = teams.find(t => t.id === player.teamId) || teamMap.get(player.teamId);
+      const teamNameStr = teamObj?.name || 'this club';
+      onShowToast(`Transfer Failed: You cannot have more than 3 players from ${teamNameStr}.`);
       return;
     }
 
     // Positional quota check for 18-man squad
-    const currentPosCount = selectedPlayers.filter(p => p.position === player.position).length;
+    const currentPosCount = squadAfterReplace.filter(p => p.position === player.position).length;
     if (player.position === 'GK' && currentPosCount >= 2) {
-      onShowToast('Max 2 Goalkeepers allowed in your squad.');
+      onShowToast('Max 2 Goalkeepers allowed in your 18-man squad.');
       return;
     }
     if (player.position === 'DEF' && currentPosCount >= 6) {
-      onShowToast('Max 6 Defenders allowed in your squad.');
+      onShowToast('Max 6 Defenders allowed in your 18-man squad.');
       return;
     }
     if (player.position === 'MID' && currentPosCount >= 6) {
-      onShowToast('Max 6 Midfielders allowed in your squad.');
+      onShowToast('Max 6 Midfielders allowed in your 18-man squad.');
       return;
     }
     if (player.position === 'FWD' && currentPosCount >= 4) {
-      onShowToast('Max 4 Forwards allowed in your squad.');
+      onShowToast('Max 4 Forwards allowed in your 18-man squad.');
       return;
     }
 
@@ -615,9 +726,14 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
       if (!captainId) setCaptainId(player.id);
     }
 
+    setPurchasePricesMap(prev => ({
+      ...prev,
+      [player.id]: buyPrice
+    }));
+
     setSelectedPlayerIds(nextSelected);
     setStartingPlayerIds(nextStarters);
-    onShowToast(`Transferred In ${player.name} (₦${player.price || 6.0}M)!`);
+    onShowToast(`Transferred In ${player.name} (₦${buyPrice.toFixed(1)}M)!`);
   };
 
   const handleSellPlayer = (playerId: string) => {
@@ -660,8 +776,21 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
       return;
     }
 
+    // Max 3 Per Club Validation across entire squad
+    const clubCounts: Record<string, number> = {};
+    for (const p of selectedPlayers) {
+      clubCounts[p.teamId] = (clubCounts[p.teamId] || 0) + 1;
+      if (clubCounts[p.teamId] > 3) {
+        const teamObj = teams.find(t => t.id === p.teamId) || teamMap.get(p.teamId);
+        const teamNameStr = teamObj?.name || 'this club';
+        onShowToast(`Transfer Failed: You cannot have more than 3 players from ${teamNameStr}.`);
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
+      const purchaseData = getSquadPurchaseData();
       const saved = await api.saveFantasySquad({
         userId: currentUser.id || currentUser.email,
         userEmail: currentUser.email,
@@ -671,7 +800,8 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         viceCaptainPlayerId: viceCaptainId || undefined,
         startingPlayerIds: startingPlayerIds,
         benchPlayerIds: benchPlayerIds,
-        playerIds: selectedPlayerIds
+        playerIds: selectedPlayerIds,
+        ...purchaseData
       });
       setMySquad(saved);
       let msg = 'Initial Squad Saved!';
@@ -771,144 +901,19 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
 
 
 
-  // --- INSIGHTS COMPUTATIONS ---
-  // Top Performers (Highest total points)
-  const topPerformers = [...(players || [])].sort((a, b) => (b.fantasyPoints || 0) - (a.fantasyPoints || 0)).slice(0, 5);
+  const [statsData, setStatsData] = useState<any>(null);
   
-  // Ownership Counts (Most Bought/Owned)
-  const ownershipCount = new Map<string, number>();
-  const captaincyCount = new Map<string, number>();
-  
-  registeredSquads.forEach(sq => {
-    (sq.playerIds || []).forEach(pid => {
-      ownershipCount.set(pid, (ownershipCount.get(pid) || 0) + 1);
-    });
-    if (sq.captainPlayerId) {
-      captaincyCount.set(sq.captainPlayerId, (captaincyCount.get(sq.captainPlayerId) || 0) + 1);
+  useEffect(() => {
+    if (activeTab === 'insights' && !statsData) {
+       api.getFantasyDashboardStats().then(setStatsData).catch(console.error);
     }
-  });
+  }, [activeTab]);
 
-  const mostOwnedPlayers = [...(players || [])].sort((a, b) => (ownershipCount.get(b.id) || 0) - (ownershipCount.get(a.id) || 0)).slice(0, 3);
-  
-  const mostCaptainedPlayerId = [...captaincyCount.entries()].sort((a, b) => b[1] - a[1])?.[0]?.[0];
-  const captaincyFavorite = mostCaptainedPlayerId ? players.find(p => p.id === mostCaptainedPlayerId) : null;
-
-  if (!mySquad && !hasConfirmedParticipation && !(currentUser.fantasyTeamName && currentUser.fantasyTeamName.trim())) {
-    return (
-      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-[#800020]/40 border border-slate-800 rounded-3xl p-6 sm:p-10 shadow-2xl max-w-2xl mx-auto space-y-6 text-slate-100 my-4 animate-fadeIn">
-        <div className="flex items-center gap-4 border-b border-rose-900/40 pb-5">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#800020] to-rose-900 text-amber-300 flex items-center justify-center p-3 shadow-xl border border-amber-400/40 shrink-0">
-            <Trophy className="w-8 h-8" />
-          </div>
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 mb-1">
-              <Sparkles className="w-3 h-3" /> Official Registration Gate
-            </div>
-            <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              Epe Premier League Fantasy Manager
-            </h2>
-            <p className="text-xs text-slate-400">
-              Logged in as <strong className="text-amber-300">{currentUser.name || currentUser.email}</strong>
-            </p>
-          </div>
-        </div>
-
-        <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800 space-y-2">
-          <h3 className="font-extrabold text-sm text-amber-300 flex items-center gap-2">
-            <Crown className="w-4 h-4 text-amber-400" /> Participate in the Official Fantasy League
-          </h3>
-          <p className="text-xs text-slate-300 leading-relaxed">
-            Welcome! To participate in the Fantasy League, pick your 18-man squad within the ₦100.0M salary cap, earn points from live match performance, compete in mini-leagues, and climb the Leaderboard.
-          </p>
-        </div>
-
-        {regError && (
-          <div className="p-3.5 bg-rose-950/90 border border-rose-600 rounded-2xl text-rose-200 text-xs font-bold flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{regError}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleConfirmRegistration} className="space-y-4">
-          {/* Inherited Gate 1 Manager Identity */}
-          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-0.5">Manager Identity (Inherited from Gate 1)</span>
-              <span className="text-sm font-black text-amber-300">{currentUser.name || currentUser.email}</span>
-            </div>
-            <span className="text-[10px] px-2.5 py-1 rounded-full bg-slate-900 border border-slate-700 text-emerald-400 font-bold flex items-center gap-1">
-              <Check className="w-3 h-3 text-emerald-400" /> Username Inherited
-            </span>
-          </div>
-
-          {/* Gate 2 Required Input: Fantasy Team Name */}
-          <div>
-            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1 flex items-center justify-between">
-              <span>Fantasy Team Name *</span>
-              <span className="text-[10px] text-amber-400 font-extrabold flex items-center gap-1">
-                <Lock className="w-3 h-3 text-amber-400" /> Permanent DB Lock Once Confirmed
-              </span>
-            </label>
-            <input
-              type="text"
-              required
-              value={regFantasyTeamName}
-              onChange={(e) => {
-                setRegFantasyTeamName(e.target.value);
-                if (teamNameError) setTeamNameError(null);
-              }}
-              onBlur={() => checkTeamNameAvailability(regFantasyTeamName)}
-              placeholder="e.g. Epe Titans FC"
-              className={`w-full bg-slate-950 border rounded-xl px-4 py-3 text-sm font-bold placeholder:text-slate-600 focus:outline-none transition-all ${
-                teamNameError ? 'border-rose-500 text-rose-200 focus:ring-2 focus:ring-rose-500' : 'border-slate-800 text-amber-300 focus:ring-2 focus:ring-amber-400'
-              }`}
-            />
-            {teamNameError ? (
-              <div className="mt-1.5 p-2.5 rounded-xl bg-rose-950/90 border border-rose-500/80 text-rose-200 text-xs font-bold flex items-center gap-2 animate-fadeIn shadow-lg">
-                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>{teamNameError}</span>
-              </div>
-            ) : (
-              <p className="text-[10px] text-slate-400 mt-1">
-                Unique squad name for your fantasy team. Once confirmed, this name is permanently locked to your profile in the database.
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-              Supported Epe Premier League Club (Optional)
-            </label>
-            <select
-              value={regFavoriteTeam}
-              onChange={(e) => setRegFavoriteTeam(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-bold text-white focus:ring-2 focus:ring-amber-400 focus:outline-none"
-            >
-              <option value="">-- None / Neutral Fan (Optional) --</option>
-              {teams.map(t => (
-                <option key={t.id} value={t.id}>{t.name} ({t.shortName})</option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isRegistering || !regFantasyTeamName.trim() || Boolean(teamNameError)}
-            className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500 text-slate-950 font-black uppercase text-xs tracking-wider shadow-xl hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isRegistering ? (
-              <RefreshCw className="w-4 h-4 animate-spin text-slate-950" />
-            ) : (
-              <>
-                <Shirt className="w-4 h-4" />
-                <span>Confirm Fantasy Team Name & Join League &rarr;</span>
-              </>
-            )}
-          </button>
-        </form>
-      </div>
-    );
-  }
+  // --- INSIGHTS COMPUTATIONS ---
+  const topPerformers = statsData?.topPerformers || [];
+  const mostOwnedPlayers = statsData?.mostOwnedPlayers || [];
+  const mostCaptainedPlayers = statsData?.mostCaptainedPlayers || [];
+  const captaincyFavorite = mostCaptainedPlayers.length > 0 ? mostCaptainedPlayers[0] : null;
 
   const clientSideTotalPoints = React.useMemo(() => {
     if (!mySquad || !players) return 0;
@@ -952,7 +957,6 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
     const starters = mySquad.startingPlayerIds || [];
     const bench = mySquad.benchPlayerIds || [];
     const activeChip = activeChipThisGW || mySquad.activeChip || null;
-
     const captainId = mySquad.captainPlayerId;
     const viceCaptainId = mySquad.viceCaptainPlayerId;
     
@@ -984,7 +988,6 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
       const stats = calculatePlayerLivePoints(p, m, isCaptain, false, activeChip, false);
       
       playerLivePtsMap.set(pId, stats.totalPoints);
-
       if (scoringIds.includes(pId)) {
         totalLivePts += stats.totalPoints;
       }
@@ -993,8 +996,36 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
     return { totalLivePts, playerLivePtsMap };
   }, [mySquad, matches, players, activeChipThisGW]);
 
+  if (!mySquad && !hasConfirmedParticipation) {
+    return (
+      <FantasyOnboardingWizard 
+        currentUser={currentUser}
+        players={players}
+        teams={teams}
+        onComplete={() => {
+          setHasConfirmedParticipation(true);
+          loadFantasyData();
+        }}
+        onClose={() => {
+          if (onExit) {
+            onExit();
+          }
+        }}
+        onShowToast={onShowToast}
+        onUpdateProfile={async (data) => {
+          if (onUpdateProfile) {
+            await onUpdateProfile(data);
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6 pb-24">
+      {/* Sticky Premium Sponsorship Banner */}
+      <SponsorshipBanner tagline="Official Fantasy League Partner" />
+
       {/* ISOLATED FANTASY HEADER */}
       {onExit && (
         <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
@@ -1012,13 +1043,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         </div>
       )}
 
-      {selectedProfilePlayer && (
-        <PlayerProfileModal
-          player={selectedProfilePlayer}
-          team={teams.find(t => t.id === selectedProfilePlayer.teamId)}
-          onClose={() => setSelectedProfilePlayer(null)}
-        />
-      )}
+      
 
       {/* GLOBAL GAMEWEEK STATUS BANNER */}
       {isGameweekLocked ? (
@@ -1083,11 +1108,11 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
 
       {/* STAR HERO CARDS SUB-DASHBOARD (SOFASCORE STYLE) */}
       {activeTab === 'hero_cards' && (() => {
-        const topExpensiveOverall = [...players].sort((a, b) => (b.price || 0) - (a.price || 0) || (b.fantasyPoints || 0) - (b.fantasyPoints || 0)).slice(0, 5);
-        const topGK = [...players].filter(p => p.position === 'GK').sort((a, b) => (b.price || 0) - (a.price || 0) || (b.fantasyPoints || 0) - (a.fantasyPoints || 0)).slice(0, 5);
-        const topDEF = [...players].filter(p => p.position === 'DEF').sort((a, b) => (b.price || 0) - (a.price || 0) || (b.fantasyPoints || 0) - (a.fantasyPoints || 0)).slice(0, 5);
-        const topMID = [...players].filter(p => p.position === 'MID').sort((a, b) => (b.price || 0) - (a.price || 0) || (b.fantasyPoints || 0) - (a.fantasyPoints || 0)).slice(0, 5);
-        const topFWD = [...players].filter(p => p.position === 'FWD').sort((a, b) => (b.price || 0) - (a.price || 0) || (b.fantasyPoints || 0) - (a.fantasyPoints || 0)).slice(0, 5);
+        const topExpensiveOverall = [...players].sort((a, b) => (b.fantasyPoints || 0) - (a.fantasyPoints || 0) || (b.price || 0) - (a.price || 0)).slice(0, 5);
+        const topGK = [...players].filter(p => p.position === 'GK').sort((a, b) => (b.fantasyPoints || 0) - (a.fantasyPoints || 0) || (b.price || 0) - (a.price || 0)).slice(0, 5);
+        const topDEF = [...players].filter(p => p.position === 'DEF').sort((a, b) => (b.fantasyPoints || 0) - (a.fantasyPoints || 0) || (b.price || 0) - (a.price || 0)).slice(0, 5);
+        const topMID = [...players].filter(p => p.position === 'MID').sort((a, b) => (b.fantasyPoints || 0) - (a.fantasyPoints || 0) || (b.price || 0) - (a.price || 0)).slice(0, 5);
+        const topFWD = [...players].filter(p => p.position === 'FWD').sort((a, b) => (b.fantasyPoints || 0) - (a.fantasyPoints || 0) || (b.price || 0) - (a.price || 0)).slice(0, 5);
 
         const displayedHeroes = heroFilter === 'overall' 
           ? topExpensiveOverall 
@@ -1165,7 +1190,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                         src={topPlayer.photoUrl}
                         alt={topPlayer.name}
                         className="w-20 h-20 rounded-2xl object-cover border-2 border-emerald-500/80 shadow-2xl cursor-pointer hover:scale-105 transition-transform"
-                        onClick={() => setSelectedProfilePlayer(topPlayer)}
+                        onClick={() => navigate(`?modal=playerProfile&playerId=${topPlayer.id}`)}
                       />
                       <span className="absolute -bottom-2 -right-2 px-1.5 py-0.5 bg-amber-400 text-slate-950 font-black text-[9px] rounded uppercase shadow">
                         {topPlayer.position}
@@ -1244,11 +1269,11 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                             src={player.photoUrl}
                             alt={player.name}
                             className="w-10 h-10 rounded-full object-cover border border-slate-700 cursor-pointer hover:scale-105 transition-transform"
-                            onClick={() => setSelectedProfilePlayer(player)}
+                            onClick={() => navigate(`?modal=playerProfile&playerId=${player.id}`)}
                           />
 
                           <div>
-                            <h5 className="font-bold text-white text-xs hover:text-amber-400 transition-colors cursor-pointer" onClick={() => setSelectedProfilePlayer(player)}>
+                            <h5 className="font-bold text-white text-xs hover:text-amber-400 transition-colors cursor-pointer" onClick={() => navigate(`?modal=playerProfile&playerId=${player.id}`)}>
                               {player.name}
                             </h5>
                             <p className="text-[11px] text-slate-400">
@@ -1540,7 +1565,10 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                             {playerLivePtsMap.get(player.id)} pts
                           </div>
                         ) : (
-                          <p className="text-[10px] font-black text-amber-400 mt-1">₦{player.price || 6.0}M</p>
+                          <div className="mt-1 text-[9px] font-bold text-amber-400 leading-tight">
+                            <span>Bought: ₦{(purchasePricesMap[player.id] ?? (player.price || 6.0)).toFixed(1)}m</span>
+                            <span className="block text-[8px] text-slate-400">Curr: ₦{(player.price || 6.0).toFixed(1)}m</span>
+                          </div>
                         )}
                       </div>
                     );
@@ -1563,28 +1591,35 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                 <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
                   <span className="font-bold text-slate-400">Goalkeeper (GK)</span>
                   <span className={`font-black px-2.5 py-1 rounded text-xs ${starterGK.length === 1 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
-                    {starterGK.length} / 1
+                    {starterGK.length} / 1 (Squad: 2)
                   </span>
                 </div>
 
                 <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
                   <span className="font-bold text-slate-400">Defenders (DEF)</span>
                   <span className={`font-black px-2.5 py-1 rounded text-xs ${starterDEF.length >= 3 && starterDEF.length <= 5 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
-                    {starterDEF.length} (Min 3, Max 5)
+                    {starterDEF.length} (3-5) | Squad: 5
                   </span>
                 </div>
 
                 <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
                   <span className="font-bold text-slate-400">Midfielders (MID)</span>
-                  <span className="font-black px-2.5 py-1 rounded text-xs bg-slate-800 text-slate-200">
-                    {starterMID.length}
+                  <span className={`font-black px-2.5 py-1 rounded text-xs ${starterMID.length >= 2 && starterMID.length <= 5 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
+                    {starterMID.length} (2-5) | Squad: 5
                   </span>
                 </div>
 
                 <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
                   <span className="font-bold text-slate-400">Forwards (FWD)</span>
                   <span className={`font-black px-2.5 py-1 rounded text-xs ${starterFWD.length >= 1 && starterFWD.length <= 3 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-rose-950 text-rose-400 border border-rose-800'}`}>
-                    {starterFWD.length} (Min 1, Max 3)
+                    {starterFWD.length} (1-3) | Squad: 3
+                  </span>
+                </div>
+
+                <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <span className="font-bold text-amber-400">Club Quota</span>
+                  <span className="font-black px-2.5 py-1 rounded text-xs bg-amber-950 text-amber-300 border border-amber-800">
+                    Max 3 Per Club
                   </span>
                 </div>
               </div>
@@ -1627,6 +1662,16 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                   <li>Click "Save Team" to submit changes before kickoff.</li>
                 </ol>
               </div>
+              <div className="mt-4 p-4 bg-rose-950/40 rounded-2xl border border-rose-900/50 space-y-3">
+                <h4 className="font-bold text-rose-400 text-xs uppercase tracking-wider">Danger Zone</h4>
+                <p className="text-[11px] text-slate-400">Permanently delete your fantasy team and wipe your points.</p>
+                <button
+                  onClick={() => setShowResetSquadModal(true)}
+                  className="w-full py-2 rounded-xl text-xs font-bold text-rose-500 border border-rose-900/50 hover:bg-rose-950/80 transition-all uppercase tracking-wider"
+                >
+                  Delete Fantasy Team
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1645,7 +1690,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                 </h2>
                 
                 <p className="text-xs text-rose-200/90 mt-0.5">
-                  Manage your 18-man roster within ₦100.0M budget. Each user gets 2 Free Transfers per Gameweek.
+                  Manage your 18-man roster within ₦100.0M budget. Each user gets 2 Free Transfers per Gameweek (Max 3 players per Club).
                 </p>
                 {timeLeft && !isGameweekLocked && (
                   <div className="mt-3 inline-flex items-center gap-2 bg-emerald-950/80 border border-emerald-500/30 px-3 py-1.5 rounded-xl">
@@ -1819,9 +1864,12 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                         </div>
 
                         <div className="flex items-center gap-3">
-                          <span className="font-black text-xs text-amber-400">
-                            ₦{player.price || 6.0}M
-                          </span>
+                          <div className="text-right">
+                            <span className="text-[10px] uppercase font-bold text-slate-400 block">Price</span>
+                            <span className="text-xs font-black text-amber-400">
+                              Bought: ₦{(purchasePricesMap[player.id] ?? (player.price || 6.0)).toFixed(1)}m | Current: ₦{(player.price || 6.0).toFixed(1)}m
+                            </span>
+                          </div>
                           <button
                             onClick={() => handleSellPlayer(player.id)}
                             disabled={isGameweekLocked}
@@ -1934,7 +1982,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                             : 'bg-slate-900 hover:bg-slate-850 border-slate-800'
                         }`}
                       >
-                        <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setSelectedProfilePlayer(player)}>
+                        <div className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity" onClick={() => navigate(`?modal=playerProfile&playerId=${player.id}`)}>
                           <img
                             src={player.photoUrl}
                             alt={player.name}
@@ -1975,13 +2023,19 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                           </div>
                           <div className="text-right">
                             <span className="text-[10px] uppercase font-bold text-slate-400 block">Price</span>
-                            <span className="text-xs font-black text-amber-400">₦{player.price || 6.0}M</span>
+                            <span className="text-xs font-black text-amber-400">
+                              {isAlreadySelected ? (
+                                `Bought: ₦${(purchasePricesMap[player.id] ?? (player.price || 6.0)).toFixed(1)}m | Current: ₦${(player.price || 6.0).toFixed(1)}m`
+                              ) : (
+                                `₦${(player.price || 6.0).toFixed(1)}m`
+                              )}
+                            </span>
                           </div>
 
 
                           <button
                             onClick={() => handleBuyPlayer(player)}
-                            disabled={isAlreadySelected || isGameweekLocked || !canAfford || selectedPlayerIds.length >= 18}
+                            disabled={isAlreadySelected || isGameweekLocked || !canAfford || (selectedPlayerIds.length >= 18 && !replacingPlayerId)}
                             className={`px-3 py-2 rounded-xl text-xs font-black uppercase transition-all cursor-pointer flex items-center gap-1.5 ${
                               isAlreadySelected
                                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
@@ -2043,7 +2097,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                 return (
                   <div
                     key={squad.id}
-                    onClick={() => setSelectedManagerSquad(squad)}
+                    onClick={() => openManagerSquadModal({ squadId: squad.id })}
                     className={`bg-slate-900 border ${isMe ? 'border-amber-400/50' : 'border-slate-800'} p-3 sm:px-5 rounded-2xl flex items-center gap-4 relative overflow-hidden group hover:bg-slate-800/60 transition-all cursor-pointer shadow-sm hover:shadow-md`}
                   >
                     <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl opacity-80 group-hover:opacity-100 transition-opacity ${isLeader ? 'bg-emerald-400' : isMe ? 'bg-amber-400' : 'bg-amber-500/50'}`}></div>
@@ -2094,7 +2148,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
 
                     <div className="hidden lg:block shrink-0 pl-2">
                       <button
-                        onClick={(e) => { e.stopPropagation(); setSelectedManagerSquad(squad); }}
+                        onClick={(e) => { e.stopPropagation(); openManagerSquadModal({ squadId: squad.id }); }}
                         className="p-2 bg-slate-950 group-hover:bg-amber-400 group-hover:text-slate-950 border border-slate-800 text-slate-300 rounded-xl transition-all shadow-sm"
                         title="View Squad"
                       >
@@ -2217,7 +2271,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                         return (
                           <div
                             key={squad.id}
-                            onClick={() => setSelectedManagerSquad(squad)}
+                            onClick={() => openManagerSquadModal({ squadId: squad.id })}
                             className={`bg-slate-900 border ${isMe ? 'border-amber-400/50' : 'border-slate-800'} p-3 rounded-2xl flex items-center gap-3 sm:gap-4 relative overflow-hidden group hover:bg-slate-800/60 transition-all cursor-pointer shadow-sm`}
                           >
                             <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl opacity-80 group-hover:opacity-100 transition-opacity ${isLeader ? 'bg-emerald-400' : isMe ? 'bg-amber-400' : 'bg-amber-500/50'}`}></div>
@@ -2260,7 +2314,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
 
                             <div className="hidden lg:block shrink-0 pl-1 sm:pl-2">
                               <button
-                                onClick={(e) => { e.stopPropagation(); setSelectedManagerSquad(squad); }}
+                                onClick={(e) => { e.stopPropagation(); openManagerSquadModal({ squadId: squad.id }); }}
                                 className="p-1.5 bg-slate-950 group-hover:bg-amber-400 group-hover:text-slate-950 border border-slate-800 text-slate-300 rounded-xl transition-all shadow-sm"
                                 title="Inspect"
                               >
@@ -2276,9 +2330,16 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
               })}
             </div>
           </div>
+        </div>
+      )}
 
       {/* INSIGHTS & STATS TAB */}
-      {activeTab === 'insights' && (
+      {(activeTab as string) === 'insights' && (!statsData ? (
+        <div className="flex flex-col items-center justify-center py-20">
+          <div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-slate-400 mt-4 font-bold animate-pulse">Loading fantasy stats...</p>
+        </div>
+      ) : (
         <div className="space-y-8 animate-fade-in">
           {/* Captaincy Favorite Hero */}
           <div>
@@ -2304,7 +2365,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                   </p>
                   <div className="pt-2 flex items-center justify-center sm:justify-start gap-4 text-xs font-bold text-rose-100">
                     <span className="bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
-                      Owned by {( (ownershipCount.get(captaincyFavorite.id) || 0) / (allSquads.length || 1) * 100 ).toFixed(1)}%
+                      Owned by {( (captaincyFavorite.ownedByCount || 0) / (allSquads.length || 1) * 100 ).toFixed(1)}%
                     </span>
                     <span className="bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
                       Total Points: {captaincyFavorite.fantasyPoints || 0}
@@ -2326,8 +2387,8 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                 <Flame className="w-5 h-5 text-rose-400" />
                 <span>Gameweek Kings</span>
               </h2>
-              <div className="flex gap-4 overflow-x-auto pb-4 snap-x custom-scrollbar">
-                {topPerformers.map((p, idx) => (
+              <div className="flex gap-4 overflow-x-auto pt-4 pb-4 snap-x custom-scrollbar">
+                {topPerformers && topPerformers.map((p, idx) => (
                   <div key={p.id} className="min-w-[200px] flex-shrink-0 bg-slate-900 border border-slate-800 rounded-3xl p-4 snap-start relative group">
                     <div className="absolute -top-3 -right-3 w-8 h-8 bg-slate-950 border-2 border-slate-800 rounded-full flex items-center justify-center text-xs font-black text-slate-400 shadow-lg">
                       #{idx + 1}
@@ -2352,8 +2413,8 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
                 <span>Market Trends (Most Bought)</span>
               </h2>
               <div className="bg-slate-950 p-4 rounded-3xl border border-slate-800 space-y-3">
-                {mostOwnedPlayers.map((p, idx) => {
-                  const ownedCount = ownershipCount.get(p.id) || 0;
+                {mostOwnedPlayers && mostOwnedPlayers.map((p, idx) => {
+                  const ownedCount = p.ownedByCount || 0;
                   const percent = allSquads.length > 0 ? ((ownedCount / allSquads.length) * 100).toFixed(1) : '0.0';
                   
                   return (
@@ -2376,112 +2437,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
             </div>
           </div>
         </div>
-      )}
-
-      {/* INSIGHTS & STATS TAB */}
-      {activeTab === 'insights' && (
-        <div className="space-y-8 animate-fade-in">
-          {/* Captaincy Favorite Hero */}
-          <div>
-            <h2 className="text-sm font-black uppercase tracking-wider text-amber-400 flex items-center gap-2 mb-4 pl-1">
-              <Crown className="w-5 h-5 text-amber-400" />
-              <span>Global Captaincy Favorite</span>
-            </h2>
-            {captaincyFavorite ? (
-              <div className="bg-gradient-to-r from-[#800020] via-rose-900 to-amber-700 p-6 sm:p-8 rounded-3xl shadow-2xl border border-amber-400/30 flex flex-col sm:flex-row items-center gap-6 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-64 h-64 bg-amber-400/10 rounded-full blur-3xl"></div>
-                <img 
-                  src={captaincyFavorite.photoUrl} 
-                  alt={captaincyFavorite.name} 
-                  className="w-28 h-28 sm:w-36 sm:h-36 object-cover rounded-full border-4 border-amber-300 shadow-xl relative z-10 bg-slate-950"
-                />
-                <div className="text-center sm:text-left relative z-10 space-y-2">
-                  <span className="bg-amber-400 text-slate-950 font-black text-[10px] px-3 py-1 uppercase tracking-widest rounded-full">
-                    Most Captained 
-                  </span>
-                  <h3 className="text-2xl sm:text-4xl font-black text-white">{captaincyFavorite.name}</h3>
-                  <p className="text-amber-200 text-sm font-bold uppercase tracking-widest">
-                    {teamMap.get(captaincyFavorite.teamId)?.name} • {captaincyFavorite.position}
-                  </p>
-                  <div className="pt-2 flex items-center justify-center sm:justify-start gap-4 text-xs font-bold text-rose-100">
-                    <span className="bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
-                      Owned by {( (ownershipCount.get(captaincyFavorite.id) || 0) / (allSquads.length || 1) * 100 ).toFixed(1)}%
-                    </span>
-                    <span className="bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
-                      Total Points: {captaincyFavorite.fantasyPoints || 0}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl text-center text-slate-400 text-sm font-bold">
-                No captaincy data available yet.
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Top Performers (Gameweek Kings) */}
-            <div className="space-y-4">
-              <h2 className="text-sm font-black uppercase tracking-wider text-amber-400 flex items-center gap-2 pl-1">
-                <Flame className="w-5 h-5 text-rose-400" />
-                <span>Gameweek Kings</span>
-              </h2>
-              <div className="flex gap-4 overflow-x-auto pb-4 snap-x custom-scrollbar">
-                {topPerformers.map((p, idx) => (
-                  <div key={p.id} className="min-w-[200px] flex-shrink-0 bg-slate-900 border border-slate-800 rounded-3xl p-4 snap-start relative group">
-                    <div className="absolute -top-3 -right-3 w-8 h-8 bg-slate-950 border-2 border-slate-800 rounded-full flex items-center justify-center text-xs font-black text-slate-400 shadow-lg">
-                      #{idx + 1}
-                    </div>
-                    <img src={p.photoUrl} alt={p.name} className="w-16 h-16 rounded-full mx-auto object-cover border-2 border-amber-400 mb-3 bg-slate-800" />
-                    <div className="text-center">
-                      <p className="font-extrabold text-sm text-white truncate px-2">{p.name}</p>
-                      <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold mb-3">{p.position}</p>
-                      <div className="bg-amber-400/10 text-amber-400 border border-amber-400/20 py-2 rounded-xl text-lg font-black">
-                        {p.fantasyPoints || 0} pts
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Market Trends (Most Bought) */}
-            <div className="space-y-4">
-              <h2 className="text-sm font-black uppercase tracking-wider text-amber-400 flex items-center gap-2 pl-1">
-                <ArrowUp className="w-5 h-5 text-emerald-400" />
-                <span>Market Trends (Most Bought)</span>
-              </h2>
-              <div className="bg-slate-950 p-4 rounded-3xl border border-slate-800 space-y-3">
-                {mostOwnedPlayers.map((p, idx) => {
-                  const ownedCount = ownershipCount.get(p.id) || 0;
-                  const percent = allSquads.length > 0 ? ((ownedCount / allSquads.length) * 100).toFixed(1) : '0.0';
-                  
-                  return (
-                    <div key={p.id} className="bg-slate-900 border border-slate-800 p-3 rounded-2xl flex items-center gap-4 relative overflow-hidden group">
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500 rounded-l-2xl"></div>
-                      <div className="font-black text-slate-600 text-lg w-4 text-right">{idx + 1}</div>
-                      <img src={p.photoUrl} alt={p.name} className="w-12 h-12 rounded-xl object-cover bg-slate-800 border border-slate-700" />
-                      <div className="flex-1">
-                        <p className="font-black text-white text-sm">{p.name}</p>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest">{teamMap.get(p.teamId)?.shortName} • {p.position}</p>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-[10px] font-bold text-emerald-400 uppercase">Selected By</div>
-                        <div className="text-sm font-black text-white">{percent}%</div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-        </div>
-      )}
+      ))}
 
       {/* FANTASY ISOLATED BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 z-40 bg-slate-950 border-t border-slate-800 shadow-[0_-10px_30px_-10px_rgba(0,0,0,0.5)] pb-safe">
@@ -2536,18 +2492,44 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
         </div>
       </div>
 
-      {/* MANAGER SQUAD INSPECTION MODAL */}
-      {selectedManagerSquad && (
-        <ManagerSquadModal
-          squad={selectedManagerSquad}
-          allSquads={allSquads}
-          players={players}
-          teams={teams}
-          matches={matches}
-          currentUserEmail={currentUser.email}
-          onClose={() => setSelectedManagerSquad(null)}
-        />
+      {showResetSquadModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-900/50 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <h2 className="text-xl font-black text-white mb-2 flex items-center gap-2">
+              <AlertTriangle className="w-6 h-6 text-rose-500" />
+              Delete Fantasy Team
+            </h2>
+            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+              Are you sure? This will permanently delete your squad and reset your fantasy points. This cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowResetSquadModal(false)}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetSquad}
+                disabled={isResettingSquad}
+                className="px-5 py-2.5 rounded-xl font-bold text-sm text-white bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-900/20 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {isResettingSquad ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
+
+      {/* MANAGER SQUAD INSPECTION MODAL */}
+      <ManagerSquadModal
+    allSquads={allSquads}
+    players={players}
+    teams={teams}
+    matches={matches}
+    currentUserEmail={currentUser.email}
+  />
     </div>
   );
 };
@@ -2561,6 +2543,7 @@ interface PitchPlayerCardProps {
   isSelected: boolean;
   isDisabled: boolean;
   livePoints?: number;
+  purchasePrice?: number;
   onTap: () => void;
   onSetCaptain: () => void;
   onSetVice: () => void;
@@ -2574,6 +2557,7 @@ const PitchPlayerCard: React.FC<PitchPlayerCardProps> = ({
   isSelected,
   isDisabled,
   livePoints,
+  purchasePrice,
   onTap,
   onSetCaptain,
   onSetVice
@@ -2619,8 +2603,12 @@ const PitchPlayerCard: React.FC<PitchPlayerCardProps> = ({
         </p>
 
         {/* Price / Points Tag */}
-        <span className="mt-1 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-[9px] font-black text-amber-300">
-          {livePoints !== undefined ? `${livePoints} pts` : `₦${player.price || 6.0}M`}
+        <span className="mt-1 px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-[9px] font-black text-amber-300 max-w-[110px] text-center truncate">
+          {livePoints !== undefined ? (
+            `${livePoints} pts`
+          ) : (
+            `Bought: ₦${(purchasePrice ?? (player.price || 6.0)).toFixed(1)}m | Curr: ₦${(player.price || 6.0).toFixed(1)}m`
+          )}
         </span>
       </div>
 

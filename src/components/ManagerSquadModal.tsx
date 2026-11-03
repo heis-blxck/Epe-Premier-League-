@@ -1,29 +1,34 @@
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useURLModal } from '../hooks/useURLModal';
 import React, { useState, useEffect } from 'react';
 import { FantasySquad, Player, Team, Match, ManagerChips } from '../types';
 import { Trophy, X, Shield, Star, Award, Zap, Sparkles, User, Flame, ChevronRight, Activity, ArrowUpRight, Crown } from 'lucide-react';
 import { api } from '../services/api';
 import { PlayerFantasyBreakdownModal } from './PlayerFantasyBreakdownModal';
-import { useBackHandler } from '../utils/backManager';
+
 
 interface ManagerSquadModalProps {
-  squad: FantasySquad;
   allSquads: FantasySquad[];
   players: Player[];
   teams: Team[];
   matches: Match[];
   currentUserEmail: string;
-  onClose: () => void;
 }
 
 export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
-  squad,
   allSquads,
   players,
   teams,
   matches,
-  currentUserEmail,
-  onClose
+  currentUserEmail
 }) => {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { openModal: openFantasyBreakdown } = useURLModal<{ playerId: string }>('fantasyBreakdown');
+  const { isOpen, closeModal, modalData } = useURLModal<{ squadId?: string }>('managerSquad');
+  
+  const squad = allSquads.find(s => s.id === modalData?.squadId);
+  
   // 1. Determine list of available Gameweeks / Matchdays
   const matchdaysFromMatches: number[] = Array.from(new Set<number>(matches.map(m => Number(m.matchday)).filter(m => !isNaN(m) && m > 0))).sort((a: number, b: number) => a - b);
   const availableGws = matchdaysFromMatches.length > 0 ? matchdaysFromMatches : Array.from({ length: 12 }, (_, i) => i + 1);
@@ -36,16 +41,9 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
   const [selectedGw, setSelectedGw] = useState<number>(latestMatchday);
   const [managerChips, setManagerChips] = useState<ManagerChips | null>(null);
   const [loadingChips, setLoadingChips] = useState<boolean>(true);
-  const [selectedBreakdownPlayer, setSelectedBreakdownPlayer] = useState<Player | null>(null);
+  
 
-  useBackHandler(() => {
-    if (selectedBreakdownPlayer) {
-      setSelectedBreakdownPlayer(null);
-      return true;
-    }
-    onClose();
-    return true;
-  }, [selectedBreakdownPlayer, onClose]);
+  
 
   // Mappings
   const playerMap = new Map<string, Player>(players.map(p => [p.id, p]));
@@ -54,13 +52,14 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
   // Global Rank Calculation
   const validSquads = allSquads.filter(s => s.id !== 'placeholder_init' && s.userEmail);
   const sortedSquads = [...validSquads].sort((a, b) => (b.totalPoints || 0) - (a.totalPoints || 0));
-  const globalRank = sortedSquads.findIndex(s => s.id === squad.id) + 1;
+  const globalRank = squad ? sortedSquads.findIndex(s => s.id === squad.id) + 1 : 0;
 
   // Fetch manager's chips data
   useEffect(() => {
     let isMounted = true;
+    if (!squad) return;
     setLoadingChips(true);
-    api.getManagerChips(squad.userId || squad.userEmail)
+    api.getManagerChips(squad?.userId || squad?.userEmail || '')
       .then(res => {
         if (isMounted) {
           setManagerChips(res);
@@ -73,11 +72,13 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
       });
 
     return () => { isMounted = false; };
-  }, [squad.userId, squad.userEmail]);
+  }, [squad?.userId, squad?.userEmail]);
+
+  if (!isOpen || !modalData?.squadId || !squad) return null;
 
   // Determine active chip for the selected Gameweek
   let activeChipForGw: 'TC' | 'BB' | 'WC' | null = null;
-  if (managerChips) {
+  if (managerChips && squad) {
     if (managerChips.tripleCaptainUsedGw === selectedGw) activeChipForGw = 'TC';
     else if (managerChips.benchBoostUsedGw === selectedGw) activeChipForGw = 'BB';
     else if (managerChips.wildcardUsedGw === selectedGw) activeChipForGw = 'WC';
@@ -127,14 +128,19 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
       let yellowCards = 0;
       let redCards = 0;
       events.forEach(e => {
-        if (e.eventType === 'Goal') {
-          if (e.goalType === 'own_goal' && e.playerId === player.id) ownGoals++;
-          else if (e.playerId === player.id) g++;
+        const typeStr = String(e.eventType || '');
+        const isGoalEvent = typeStr === 'Goal' || typeStr === 'Penalty Goal' || typeStr === 'penalty' || typeStr === 'Own Goal';
+        const isP = String(e.playerId) === String(player.id);
+        const isA = String(e.assistPlayerId) === String(player.id) || String(e.assisterId) === String(player.id);
+
+        if (isGoalEvent) {
+          if ((e.goalType === 'own_goal' || typeStr === 'Own Goal') && isP) ownGoals++;
+          else if (isP) g++;
           
-          if (e.assistPlayerId === player.id || e.assisterId === player.id) a++;
+          if (isA) a++;
         }
-        if (e.eventType === 'Yellow Card' && e.playerId === player.id) yellowCards++;
-        if (e.eventType === 'Red Card' && e.playerId === player.id) redCards++;
+        if (typeStr === 'Yellow Card' && isP) yellowCards++;
+        if (typeStr === 'Red Card' && isP) redCards++;
       });
 
       totalGoals += g;
@@ -266,7 +272,7 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
     return (
       <div 
         key={player.id} 
-        onClick={() => setSelectedBreakdownPlayer(player)}
+        onClick={() => openFantasyBreakdown({ playerId: player.id })}
         className={`relative flex flex-col items-center group transition-all transform hover:scale-105 cursor-pointer ${
           isBench ? 'w-20 sm:w-24' : 'w-22 sm:w-28'
         }`}
@@ -353,7 +359,7 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
           </div>
 
           <button 
-            onClick={onClose}
+            onClick={closeModal}
             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -534,7 +540,7 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
           </div>
 
           <button
-            onClick={onClose}
+            onClick={closeModal}
             className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg cursor-pointer"
           >
             Close Dashboard
@@ -543,14 +549,7 @@ export const ManagerSquadModal: React.FC<ManagerSquadModalProps> = ({
 
       </div>
 
-      {selectedBreakdownPlayer && (
-        <PlayerFantasyBreakdownModal
-          player={selectedBreakdownPlayer}
-          matches={matches}
-          selectedGw={selectedGw}
-          onClose={() => setSelectedBreakdownPlayer(null)}
-        />
-      )}
+      <PlayerFantasyBreakdownModal players={players} matches={matches} selectedGw={selectedGw} />
     </div>
   );
 };

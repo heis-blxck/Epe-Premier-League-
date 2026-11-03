@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Team } from '../types';
 import { api } from '../services/api';
+import { bulkUploadRosterToFirestore } from '../services/bulkUploadService';
 import { Upload, Database, AlertTriangle, Users } from 'lucide-react';
 
 interface BulkUploadManagerProps {
@@ -34,13 +35,21 @@ export const BulkUploadManager: React.FC<BulkUploadManagerProps> = ({
     try {
       setIsUploadingRoster(true);
       setRosterError(null);
-      const res = await api.bulkUploadRoster(selectedTeamId, rosterText);
+
+      const apiRes = await api.bulkUploadRoster(selectedTeamId, rosterText);
+      const importedCount = apiRes.importedCount;
+
+      // 3. Update UI state & show toast
       const teamName = teams.find(t => t.id === selectedTeamId)?.name || 'Team';
-      onShowToast(`Successfully imported ${res.importedCount} players into ${teamName}!`);
+      onShowToast(`Successfully imported ${importedCount} players into ${teamName}!`);
       setRosterText('');
       onSuccess();
     } catch (err: any) {
-      setRosterError(err.message || 'Error occurred during bulk roster upload');
+      // 4. Catch block for error logging
+      console.error('Bulk roster upload failed:', err);
+      const errMsg = err.message || 'Error occurred during bulk roster upload';
+      setRosterError(errMsg);
+      onShowToast(errMsg);
     } finally {
       setIsUploadingRoster(false);
     }
@@ -118,7 +127,7 @@ export const BulkUploadManager: React.FC<BulkUploadManagerProps> = ({
           <button
             type="submit"
             disabled={isUploadingRoster}
-            className="px-6 py-2.5 bg-[#800020] hover:bg-[#a00028] disabled:opacity-50 text-white font-bold rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer"
+            className="px-6 py-2.5 bg-[#800020] hover:bg-[#f97316] disabled:opacity-50 text-white font-bold rounded-xl shadow-lg transition-all flex items-center gap-2 cursor-pointer"
           >
             <Upload className="w-4 h-4" />
             {isUploadingRoster ? 'Processing Ingestion...' : 'Import Team Roster'}

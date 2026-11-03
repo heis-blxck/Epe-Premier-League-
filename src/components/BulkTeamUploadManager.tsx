@@ -33,7 +33,9 @@ export const BulkTeamUploadManager: React.FC<BulkTeamUploadManagerProps> = ({
       setTeamText('');
       onSuccess();
     } catch (err: any) {
-      setError(err.message || 'Error occurred during bulk team upload');
+      const errMsg = err.message || 'Error occurred during bulk team upload';
+      setError(errMsg);
+      onShowToast(errMsg);
     } finally {
       setIsUploading(false);
     }

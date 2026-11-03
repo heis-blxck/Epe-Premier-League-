@@ -1,12 +1,12 @@
 {
-  "projectId": "arched-study-cnn32",
-  "appId": "1:14470454645:web:d6d10dbd593b615692473c",
-  "apiKey": "AIzaSyDHfQyxht44iwXMcFNNmeoR4qXpuXZtoRY",
-  "authDomain": "arched-study-cnn32.firebaseapp.com",
+  "projectId": "epl-c18ef",
+  "appId": "1:319128673164:web:80224b8ed861bedd4d94a9",
+  "apiKey": "AIzaSyBMWgtfseytiOob8AEN1pPEUJWyAkRAv5Q",
+  "authDomain": "epl-c18ef.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-epepremierleague-7596b478-8ce9-4b28-8acd-0a3d632b7f70",
-  "storageBucket": "arched-study-cnn32.firebasestorage.app",
-  "messagingSenderId": "14470454645",
+  "storageBucket": "epl-c18ef.firebasestorage.app",
+  "messagingSenderId": "319128673164",
   "measurementId": "",
-  "oAuthClientId": "14470454645-8mcmcemo3p9f1ua0d89vlhngjmsa5rdu.apps.googleusercontent.com",
+  "oAuthClientId": "319128673164-13cl7dtc16etle6886dlrtf791s4dgf7.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

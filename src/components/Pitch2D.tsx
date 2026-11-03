@@ -262,7 +262,7 @@ export const Pitch2D: React.FC<Pitch2DProps> = ({
               onClick={() => handleTeamToggle('home')}
               className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 teamSide === 'home'
-                  ? 'bg-gradient-to-r from-[#800020] via-rose-950 to-rose-900 text-amber-300 shadow-lg border border-rose-700/50 scale-[1.02]'
+                  ? 'bg-gradient-to-r from-[#800020] via-[#881337] to-[#FBB931] text-slate-950 shadow-lg border border-[#FFE3B3]/40 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
@@ -278,7 +278,7 @@ export const Pitch2D: React.FC<Pitch2DProps> = ({
               onClick={() => handleTeamToggle('away')}
               className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 teamSide === 'away'
-                  ? 'bg-gradient-to-r from-[#800020] via-rose-950 to-rose-900 text-amber-300 shadow-lg border border-rose-700/50 scale-[1.02]'
+                  ? 'bg-gradient-to-r from-[#800020] via-[#881337] to-[#FBB931] text-slate-950 shadow-lg border border-[#FFE3B3]/40 scale-[1.02]'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
               }`}
             >
@@ -376,11 +376,15 @@ export const Pitch2D: React.FC<Pitch2DProps> = ({
               const fullPlayer = getFullPlayer(player.playerId, player.name);
 
               // Derive match events for player
-              const playerGoals = teamEvents.filter(e => e.playerId === player.playerId && e.eventType === 'Goal').length;
-              const playerAssists = teamEvents.filter(e => e.assisterId === player.playerId && e.eventType === 'Goal').length;
-              const hasYellowCard = teamEvents.some(e => e.playerId === player.playerId && e.eventType === 'Yellow Card');
-              const hasRedCard = teamEvents.some(e => e.playerId === player.playerId && e.eventType === 'Red Card');
-              const subOutEvt = teamEvents.find(e => e.playerId === player.playerId && e.eventType === 'Sub');
+              const isGoal = (e: any) => {
+                const t = String(e.eventType || '');
+                return (t === 'Goal' || t === 'Penalty Goal' || t === 'penalty') && e.goalType !== 'own_goal';
+              };
+              const playerGoals = teamEvents.filter(e => String(e.playerId) === String(player.playerId) && isGoal(e)).length;
+              const playerAssists = teamEvents.filter(e => (String(e.assisterId) === String(player.playerId) || String((e as any).assistPlayerId) === String(player.playerId)) && isGoal(e)).length;
+              const hasYellowCard = teamEvents.some(e => String(e.playerId) === String(player.playerId) && String(e.eventType) === 'Yellow Card');
+              const hasRedCard = teamEvents.some(e => String(e.playerId) === String(player.playerId) && String(e.eventType) === 'Red Card');
+              const subOutEvt = teamEvents.find(e => String(e.playerId) === String(player.playerId) && String(e.eventType) === 'Sub');
 
               return (
                 <div

@@ -1,17 +1,20 @@
 const fs = require('fs');
-let code = fs.readFileSync('server.ts', 'utf8');
+let content = fs.readFileSync('server.ts', 'utf8');
 
-// Remove fcmAdminApp initialization
-code = code.replace(/import \{ initializeApp \} from 'firebase-admin\/app';\n/, '');
-code = code.replace(/import \{ getMessaging \} from 'firebase-admin\/messaging';\n/, '');
+const target = `        authorTitle: isOfficialRole ? "" : (req.body.authorTitle || "Official League Correspondent"),`;
+const targetWindows = target.replace(/\n/g, '\r\n');
 
-const fcmInitRegex = /let fcmAdminApp = null;[\s\S]*?\} catch \(e\) \{\s*console\.warn\('Failed to initialize Firebase Admin SDK', e\);\s*\}/;
-code = code.replace(fcmInitRegex, '');
+const replacement = `        authorTitle: isOfficialRole ? "" : (req.body.authorTitle || "Official League Correspondent"),
+        customReporterRole: isOfficialRole ? "Football Association" : (req.body.customReporterRole || "Reporter"),`;
+const replacementWindows = replacement.replace(/\n/g, '\r\n');
 
-const sendFcmRegex = /const sendFCMNotification = async \(notif\) => \{[\s\S]*?  db\.on\('new_notification', sendFCMNotification\);/g;
-code = code.replace(sendFcmRegex, '');
-
-const fcmTestRegex = /  app\.post\('\/api\/notifications\/test', async \(req, res\) => \{[\s\S]*?  \}\);/g;
-code = code.replace(fcmTestRegex, '');
-
-fs.writeFileSync('server.ts', code);
+if (content.includes(target)) {
+    content = content.replace(target, replacement);
+    console.log("Patched server.ts");
+} else if (content.includes(targetWindows)) {
+    content = content.replace(targetWindows, replacementWindows);
+    console.log("Patched server.ts (Windows)");
+} else {
+    console.error("Target not found!");
+}
+fs.writeFileSync('server.ts', content, 'utf8');
