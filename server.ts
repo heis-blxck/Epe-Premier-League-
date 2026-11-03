@@ -1,8 +1,52 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import { DBStore } from './src/server/db';
+import { createClient, type User as SupabaseAuthUser } from '@supabase/supabase-js';
+
+// Supabase client for server-side password validation
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+const serverSupabase = supabaseUrl && supabaseAnonKey
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
+      }
+    })
+  : null;
+
+const MIN_PASSWORD_LENGTH = 6;
+
+function mapSupabaseAuthError(
+  error: { message?: string } | null | undefined,
+  fallback: string
+): { status: number; error: string } {
+  const message = error?.message?.trim() || 'Authentication failed.';
+  const lower = message.toLowerCase();
+
+  if (lower.includes('invalid login') || lower.includes('invalid credentials') || lower.includes('wrong password')) {
+    return { status: 401, error: "Incorrect password. Please try again or use 'Forgot Password'." };
+  }
+  if (lower.includes('email not confirmed')) {
+    return { status: 401, error: 'Email not yet confirmed. Please check your inbox.' };
+  }
+  if (lower.includes('too many requests') || lower.includes('rate limit') || lower.includes('too many')) {
+    return { status: 429, error: 'Too many attempts. Please wait a moment and try again.' };
+  }
+  if (lower.includes('invalid email') || lower.includes('unable to validate email')) {
+    return { status: 400, error: 'Please enter a valid email address.' };
+  }
+  if (lower.includes('password')) {
+    return { status: 400, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.` };
+  }
+
+  return { status: 401, error: `${fallback}: ${message}` };
+}
+
 
 const PORT = 3000;
 
@@ -848,38 +892,114 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/users/login", (req, res) => {
+  app.post("/api/users/login", async (req, res) => {
     try {
       db.assertWritable();
-      const email = req.body.email ? req.body.email.trim().toLowerCase() : "";
+      const email = req.body.email ? String(req.body.email).trim().toLowerCase() : "";
+      const password = req.body.password !== undefined && req.body.password !== null
+        ? String(req.body.password)
+        : undefined;
+      const suppliedName = req.body.name ? String(req.body.name).trim() : "";
+      const isSignup = Boolean(suppliedName); // signup = name is provided
+
       if (!email || !email.includes("@")) {
-        return res.status(400).json({ error: "Valid email address is required" });
+        return res.status(400).json({ error: "Please enter a valid email address." });
       }
+
+      if (!password) {
+        return res.status(400).json({ error: "Password is required." });
+      }
+
+      if (isSignup && password.length < MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.` });
+      }
+
+      // Supabase Auth is the source of truth; local profiles can lag behind its
+      // users table while the database sync is running.
+      type AuthenticationResult =
+        | { user: SupabaseAuthUser; failure: null }
+        | { user: null; failure: { status: number; error: string } };
+      const authenticateWithSupabase = async (): Promise<AuthenticationResult> => {
+        if (!serverSupabase) {
+          return {
+            user: null,
+            failure: { status: 503, error: "Authentication is not configured. Please contact the league administrator." }
+          };
+        }
+
+        const { data, error } = await serverSupabase.auth.signInWithPassword({ email, password });
+        if (error) {
+          return { user: null, failure: mapSupabaseAuthError(error, "Sign in failed") };
+        }
+        if (!data?.user) {
+          return { user: null, failure: { status: 401, error: "Sign in failed. Please try again." } };
+        }
+        return { user: data.user, failure: null };
+      };
+
+      // --- SIGN IN flow ---
+      if (!isSignup) {
+        const authentication = await authenticateWithSupabase();
+        if (authentication.failure) {
+          return res.status(authentication.failure.status).json({ error: authentication.failure.error });
+        }
+
+        const existing = db.getUsers().find((u) => u.email.toLowerCase() === email);
+        const authUser = authentication.user;
+        const user = db.saveUser({
+          ...(existing || {}),
+          id: existing?.id || authUser.id,
+          email: authUser.email || email,
+          name: existing?.name || String(authUser.user_metadata?.name || email.split("@")[0]),
+          role: existing?.role || "fan",
+          createdAt: existing?.createdAt || authUser.created_at || new Date().toISOString(),
+          notificationsEnabled: existing?.notificationsEnabled ?? true,
+          themePreference: existing?.themePreference || "dark",
+          ...(req.body.favoriteTeamId ? { favoriteTeamId: String(req.body.favoriteTeamId).trim() } : {}),
+          ...(req.body.avatarUrl ? { avatarUrl: String(req.body.avatarUrl).trim() } : {}),
+          ...(req.body.fantasyTeamName ? { fantasyTeamName: String(req.body.fantasyTeamName).trim() } : {})
+        });
+        return res.json(user);
+      }
+
+      // --- SIGN UP flow ---
+      const authentication = await authenticateWithSupabase();
+      if (authentication.failure) {
+        if (authentication.failure.status === 401 && db.getUsers().some((u) => u.email.toLowerCase() === email)) {
+          return res.status(401).json({
+            error: "An account with this email already exists. Please sign in with the correct password."
+          });
+        }
+        return res.status(authentication.failure.status).json({ error: authentication.failure.error });
+      }
+
       const existing = db.getUsers().find((u) => u.email.toLowerCase() === email);
-      if (!existing && !req.body.name) {
-        return res.status(401).json({ error: "Account not found. Please sign up first." });
-      }
       if (existing) {
         const user = db.saveUser({
           ...existing,
-          name: req.body.name || existing.name,
-          favoriteTeamId: req.body.favoriteTeamId || existing.favoriteTeamId,
-          avatarUrl: req.body.avatarUrl || existing.avatarUrl,
-          fantasyTeamName: req.body.fantasyTeamName || existing.fantasyTeamName
+          name: suppliedName || existing.name,
+          ...(req.body.favoriteTeamId ? { favoriteTeamId: String(req.body.favoriteTeamId).trim() } : {}),
+          ...(req.body.avatarUrl ? { avatarUrl: String(req.body.avatarUrl).trim() } : {}),
+          ...(req.body.fantasyTeamName ? { fantasyTeamName: String(req.body.fantasyTeamName).trim() } : {})
         });
         return res.json(user);
-      } else {
-        const newUser = db.saveUser({
-          email,
-          name: req.body.name || email.split("@")[0],
-          favoriteTeamId: req.body.favoriteTeamId || "team-1",
-          fantasyTeamName: req.body.fantasyTeamName,
-          avatarUrl: req.body.avatarUrl,
-          notificationsEnabled: true,
-          themePreference: req.body.themePreference || "dark"
-        });
-        return res.json(newUser);
       }
+
+      // Signup already created the Supabase Auth account; create its local
+      // profile immediately rather than waiting for the background DB sync.
+      const newUser = db.saveUser({
+        id: authentication.user.id,
+        email: authentication.user.email || email,
+        name: suppliedName || String(authentication.user.user_metadata?.name || email.split("@")[0]),
+        role: "fan",
+        createdAt: authentication.user.created_at || new Date().toISOString(),
+        notificationsEnabled: true,
+        themePreference: req.body.themePreference === "light" ? "light" : "dark",
+        ...(req.body.favoriteTeamId ? { favoriteTeamId: String(req.body.favoriteTeamId).trim() } : {}),
+        ...(req.body.fantasyTeamName ? { fantasyTeamName: String(req.body.fantasyTeamName).trim() } : {}),
+        ...(req.body.avatarUrl ? { avatarUrl: String(req.body.avatarUrl).trim() } : {})
+      });
+      return res.json(newUser);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -896,13 +1016,18 @@ async function startServer() {
       if (!existing) {
         return res.status(404).json({ error: "No user account found with this email address. Please sign up." });
       }
+
       await db.addNotification({
         title: `🔑 Password Recovery Request`,
         message: `Password recovery requested for user: ${email} (${existing.name}). Routed to League Administration.`,
         type: 'admin_alert',
         eventType: 'Published News'
       });
-      res.json({ success: true, message: `Password recovery instructions and instant secure login link sent to ${email}. Notified League Administration.` });
+
+      res.json({
+        success: true,
+        message: `Password recovery request received. League Administration has been notified and will contact you at ${email}.`
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

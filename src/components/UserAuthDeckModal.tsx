@@ -45,7 +45,11 @@ import {
   CheckCircle2,
   Gift,
   Award,
-  Users
+  Users,
+  AlertTriangle,
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 import { api } from '../services/api';
@@ -168,8 +172,8 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
   const setViewMode = (mode: string) => {
     setViewModeState(mode);
   };
-  const authMode = modalData?.stage === 'signup' ? 'signup' : 'signin';
-  const setAuthMode = (mode: string) => setViewMode(mode);
+  const authMode: 'signin' | 'signup' = viewMode === 'signup' ? 'signup' : 'signin';
+  const setAuthMode = (mode: 'signin' | 'signup') => setViewMode(mode);
 
   // Audio Alerts State
   const [soundFxEnabled, setSoundFxEnabled] = useState<boolean>(() => {
@@ -179,6 +183,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
   // Auth form state
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [signupAvatar, setSignupAvatar] = useState<string>(AVATAR_PRESETS[0].url);
@@ -279,8 +284,10 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
     }
   };
 
-  const handleCustomLogin = async (e: React.FormEvent) => {
+  const handleCustomLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const formPassword = new FormData(e.currentTarget).get('password');
+    const password = typeof formPassword === 'string' ? formPassword : passwordInput;
     if (!emailInput.trim() || !emailInput.includes('@')) {
       setStatusMsg('Please enter a valid email address.');
       return;
@@ -301,16 +308,24 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
         // continue
       }
     }
+    if (!password) {
+      setStatusMsg('Please enter your password.');
+      return;
+    }
+    if (authMode === 'signup' && password.length < 6) {
+      setStatusMsg('Password must be at least 6 characters long.');
+      return;
+    }
     setIsSubmitting(true);
     setStatusMsg(null);
     try {
       await onLogin(
         emailInput.trim(), 
         authMode === 'signup' ? nameInput.trim() || undefined : undefined, 
-        selectedTeam || undefined,
+        authMode === 'signup' ? (selectedTeam || undefined) : undefined,
         authMode === 'signup' ? signupAvatar : undefined,
         undefined,
-        passwordInput.trim() || undefined
+        password
       );
       if (onNavigateToTab) onNavigateToTab('matches');
       setStatusMsg('Successfully authenticated!');
@@ -1102,33 +1117,73 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-bold uppercase mb-1 text-slate-500 dark:text-slate-400">
-                    Password
+                    Password *
                   </label>
                   <div className="relative">
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
+                      name="password"
+                      required
+                      minLength={authMode === 'signup' ? 6 : undefined}
+                      autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
                       placeholder="••••••••"
                       value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      className="w-full rounded-xl pl-9 pr-4 py-3 text-xs font-bold border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                      onChange={(e) => {
+                        setPasswordInput(e.target.value);
+                        if (statusMsg) setStatusMsg(null);
+                      }}
+                      className="w-full rounded-xl pl-9 pr-12 py-3 text-xs font-bold border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-amber-400 focus:outline-none"
                     />
                     <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(visible => !visible)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-amber-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {authMode === 'signup' ? 'Use at least 6 characters.' : 'Enter the password linked to your account.'}
+                  </p>
                 </div>
 
                 {statusMsg && (
-                  <div className="p-3 rounded-xl bg-amber-400/20 text-amber-600 dark:text-amber-300 border border-amber-400/30 text-xs font-bold text-center">
-                    {statusMsg}
+                  <div
+                    role="alert"
+                    className="p-3 rounded-xl bg-rose-950/90 text-rose-200 border border-rose-700 text-xs font-bold flex items-start gap-2.5 animate-[shake_0.4s_ease-in-out]"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <span className="flex-1">{statusMsg}</span>
+                    <button
+                      type="button"
+                      onClick={() => setStatusMsg(null)}
+                      aria-label="Dismiss error"
+                      className="text-rose-400 hover:text-rose-200 shrink-0 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 )}
 
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full bg-[#800020] hover:bg-rose-900 text-amber-300 font-black py-3.5 rounded-xl text-xs transition-all shadow-lg border border-rose-800 flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full bg-[#800020] hover:bg-rose-900 text-amber-300 font-black py-3.5 rounded-xl text-xs transition-all shadow-lg border border-rose-800 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  <span>{authMode === 'signin' ? 'Sign In to Account' : 'Create Account'}</span>
-                  <ArrowRight className="w-4 h-4" />
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>{authMode === 'signin' ? 'Signing In...' : 'Creating Account...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>{authMode === 'signin' ? 'Sign In to Account' : 'Create Account'}</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </form>
             </div>

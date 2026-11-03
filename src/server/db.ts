@@ -165,31 +165,6 @@ const INITIAL_EVENTS: MatchEvent[] = [];
 
 const INITIAL_RATINGS: Record<string, Record<string, number>> = {};
 
-const INITIAL_NEWS: NewsArticle[] = [
-  {
-    id: 'news-1',
-    title: 'Epe Premier League 2026 Season Officially Kickstarted',
-    summary: 'The new season of the Epe Premier League brings 6 elite clubs together for a thrilling campaign with full digital fantasy tracking.',
-    content: 'Football fans across the Epe division are celebrating as the 2026 season officially kicks off. With top clubs like Epe Warriors, Lagos City FC, and Ikorodu United competing, fans can follow real-time scores, standings, and fantasy stats live in the app.',
-    coverImage: 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=800&q=80',
-    coverImageUrl: 'https://images.unsplash.com/photo-1508098682722-e99c43a406b2?auto=format&fit=crop&w=800&q=80',
-    author: 'FA Media Team',
-    publishedAt: new Date().toISOString(),
-    category: 'League News'
-  },
-  {
-    id: 'news-2',
-    title: 'Official Fantasy Premier League Module Now Live',
-    summary: 'Assemble your dream 11, choose your captain, and compete in manager mini-leagues.',
-    content: 'Fantasy managers can now pick 11 players within the budget limit. Real-time match events will automatically allocate fantasy points and bonus points at the conclusion of every fixture.',
-    coverImage: 'https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=800&q=80',
-    coverImageUrl: 'https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=800&q=80',
-    author: 'EPL Technical Committee',
-    publishedAt: new Date().toISOString(),
-    category: 'Fantasy'
-  }
-];
-
 const INITIAL_ADMINS: AdminUser[] = [
   {
     id: 'admin-super-1',
@@ -636,16 +611,18 @@ export class DBStore extends EventEmitter {
                      const docId = cacheKey.substring(colPrefix.length);
                      if (!currentIds.has(docId)) {
                          promises.push(
-                             supabase.from(colMap.col).delete().eq('id', docId).then(({ error }) => {
-                                 if (error) {
-                                     if (isMissingSchemaError(error)) {
-                                         delete this.lastFirestoreSyncState[cacheKey];
-                                         return;
+                             Promise.resolve(
+                                 supabase.from(colMap.col).delete().eq('id', docId).then(({ error }) => {
+                                     if (error) {
+                                         if (isMissingSchemaError(error)) {
+                                             delete this.lastFirestoreSyncState[cacheKey];
+                                             return;
+                                         }
+                                         throw error;
                                      }
-                                     throw error;
-                                 }
-                                 delete this.lastFirestoreSyncState[cacheKey];
-                             }).catch((e: any) => {
+                                     delete this.lastFirestoreSyncState[cacheKey];
+                                 })
+                             ).catch((e: any) => {
                                  const msg = e?.message || e?.error?.message || String(e);
                                  if (msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('permission') || e?.code === '42501') {
                                      this.isFirestoreSynced = false;
@@ -666,16 +643,18 @@ export class DBStore extends EventEmitter {
                  const cacheKey = `${colMap.col}_${id}`;
                  if (this.lastFirestoreSyncState[cacheKey] !== stringified) {
                      promises.push(
-                         supabase.from(colMap.col).upsert(JSON.parse(stringified), { onConflict: 'id' }).then(({ error }) => {
-                             if (error) {
-                                 if (isMissingSchemaError(error)) {
-                                     this.lastFirestoreSyncState[cacheKey] = stringified;
-                                     return;
+                         Promise.resolve(
+                             supabase.from(colMap.col).upsert(JSON.parse(stringified), { onConflict: 'id' }).then(({ error }) => {
+                                 if (error) {
+                                     if (isMissingSchemaError(error)) {
+                                         this.lastFirestoreSyncState[cacheKey] = stringified;
+                                         return;
+                                     }
+                                     throw error;
                                  }
-                                 throw error;
-                             }
-                             this.lastFirestoreSyncState[cacheKey] = stringified;
-                         }).catch((e: any) => {
+                                 this.lastFirestoreSyncState[cacheKey] = stringified;
+                             })
+                         ).catch((e: any) => {
                              const rawMsg = e?.message || e?.error?.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
                              const cleanMsg = typeof rawMsg === 'string' ? rawMsg.replace(/[\r\n\t]+/g, ' ').trim() : 'Supabase write failed';
                              if (cleanMsg.toLowerCase().includes('quota') || cleanMsg.toLowerCase().includes('permission') || e?.code === '42501') {
@@ -908,11 +887,11 @@ export class DBStore extends EventEmitter {
         email: emailLower,
         name: user.name || emailLower.split('@')[0],
         role: assignedRole,
-        favoriteTeamId: user.favoriteTeamId || 'team-1',
-        fantasyTeamName: user.fantasyTeamName && user.fantasyTeamName.trim() ? user.fantasyTeamName.trim() : undefined,
+        ...(user.favoriteTeamId ? { favoriteTeamId: user.favoriteTeamId } : {}),
+        ...(user.fantasyTeamName && user.fantasyTeamName.trim() ? { fantasyTeamName: user.fantasyTeamName.trim() } : {}),
         notificationsEnabled: user.notificationsEnabled ?? true,
         themePreference: user.themePreference || 'dark',
-        avatarUrl: user.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
+        ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
         createdAt: new Date().toISOString()
       });
       this.data.users.push(updatedUser);
@@ -1188,14 +1167,18 @@ export class DBStore extends EventEmitter {
     const playerId = player.id || `p-${Date.now()}`;
     const idx = this.data.players.findIndex(p => p.id === playerId);
     const existing: Partial<Player> = idx >= 0 ? this.data.players[idx] : {};
-    const defaultTeamId = this.data.teams && this.data.teams.length > 0 ? this.data.teams[0].id : 'team-1';
+    const resolvedTeamId = player.teamId || existing.teamId || this.data.teams?.[0]?.id;
+
+    if (!resolvedTeamId) {
+      throw new Error('Create at least one team before adding players.');
+    }
 
     const fullPlayer: Player = sanitizeForFirestore({
       ...existing,
       ...player,
       id: playerId,
       name: player.name || existing.name || 'New Player',
-      teamId: player.teamId || existing.teamId || defaultTeamId,
+      teamId: resolvedTeamId,
       position: player.position || existing.position || 'MID',
       goals: player.goals ?? existing.goals ?? 0,
       assists: player.assists ?? existing.assists ?? 0,
@@ -1278,13 +1261,22 @@ export class DBStore extends EventEmitter {
     this.assertWritable();
     const matchId = match.id || `m-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const teams = this.getTeams();
-    const defaultHome = teams[0]?.id || 'team-1';
-    const defaultAway = teams[1]?.id || 'team-2';
-    const homeTeam = teams.find(t => t.id === (match.homeTeamId || defaultHome));
+    const homeTeamId = match.homeTeamId || teams[0]?.id;
+    const awayTeamId = match.awayTeamId || teams[1]?.id;
+
+    if (!homeTeamId || !awayTeamId) {
+      throw new Error('Create at least two teams before scheduling a match.');
+    }
+    if (homeTeamId === awayTeamId) {
+      throw new Error('Home and away teams must be different.');
+    }
+
+    const homeTeam = teams.find(t => t.id === homeTeamId);
 
     const fullMatchData = {
-      homeTeamId: match.homeTeamId || defaultHome,
-      awayTeamId: match.awayTeamId || defaultAway,
+      ...match,
+      homeTeamId,
+      awayTeamId,
       homeScore: Number(match.homeScore ?? 0),
       awayScore: Number(match.awayScore ?? 0),
       status: match.status || 'Scheduled',
@@ -1299,7 +1291,6 @@ export class DBStore extends EventEmitter {
       venue: match.venue || homeTeam?.stadium || 'Epe Township Stadium',
       matchday: Number(match.matchday ?? 1),
       competition_type: match.competition_type || 'League',
-      ...match,
       id: matchId
     };
 

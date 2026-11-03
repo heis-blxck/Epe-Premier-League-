@@ -1,6 +1,18 @@
 -- ====================================================================
 -- SUPABASE SQL SCHEMA FOR EPE PREMIER LEAGUE PLATFORM
 -- ====================================================================
+--
+-- ⚠️ LEGACY / NOT APPLIED
+-- The deployed Supabase project uses camelCase table and column names
+-- (for example public.users."favoriteTeamId"). The snake_case tables in
+-- this file are not used by the current application and do not exist in
+-- the live project. Do not run this file against production.
+--
+-- Live public.users columns (verified):
+--   id, email, name, role, "favoriteTeamId", "fantasyTeamName",
+--   "notificationsEnabled", "themePreference", "avatarUrl", "createdAt",
+--   "hasFantasyTeam", "fantasySquadId"
+-- ====================================================================
 
 -- 1. Match Predictions Table (Interactive Fan Prediction Engine)
 CREATE TABLE IF NOT EXISTS public.match_predictions (

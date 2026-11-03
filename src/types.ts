@@ -21,6 +21,8 @@ export interface UserAccount {
   notificationsEnabled: boolean;
   themePreference: ThemeMode;
   avatarUrl?: string;
+  hasFantasyTeam?: boolean;
+  fantasySquadId?: string;
   createdAt: string;
 }
 

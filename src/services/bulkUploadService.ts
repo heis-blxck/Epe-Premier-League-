@@ -80,7 +80,7 @@ export const bulkUploadRosterToSupabase = async (
       shirtNumber: Math.floor(Math.random() * 89) + 10,
       price: playerItem.price,
       currentPrice: playerItem.price,
-      photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+      photoUrl: '',
       isSuspended: false,
       isInjured: false,
       injuryStatus: 'Fit'

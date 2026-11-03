@@ -5,6 +5,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Match, Team, Player, NewsArticle, LeagueStats as LeagueStatsType, AdminUser, UserAccount, AppNotification, ThemeMode, AppSettings, Advertisement } from './types';
 import { api } from './services/api';
 import { signupUserToSupabase } from './services/userService';
+import { isSupabaseConfigured } from './supabase';
 import { AdDisplay } from './components/AdDisplay';
 import { Header } from './components/Header';
 import { EpeLogo } from './components/EpeLogo';
@@ -25,10 +26,9 @@ import { PlayerProfileModal } from './components/PlayerProfileModal';
 import { UserAuthDeckModal } from './components/UserAuthDeckModal';
 import { MandatoryLoginGate } from './components/MandatoryLoginGate';
 import { AboutPage } from './components/AboutPage';
+import { TabContentSkeleton } from './components/TabContentSkeleton';
 
 import { Shield, Sparkles, RefreshCw, Trophy, Radio, Newspaper, Goal, X, Bell, Star, WifiOff } from 'lucide-react';
-
-const splashLogo = '/logo.png';
 
 export default function App() {
   const location = useLocation();
@@ -98,7 +98,7 @@ export default function App() {
 
   // Network connectivity state
   const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
-  const [showOfflineModal, setShowOfflineModal] = useState<boolean>(false);
+  const [showOfflineModal, setShowOfflineModal] = useState<boolean>(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
 
   const lastBackPressRef = useRef<number>(0);
 
@@ -448,16 +448,20 @@ export default function App() {
     password?: string
   ) => {
     if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-      await Notification.requestPermission();
+      void Notification.requestPermission().catch(error => {
+        console.warn('Unable to request notification permission:', error);
+      });
     }
 
-    // Verify server database availability and save user on server first
-    const user = await api.loginUser(email, name, favoriteTeamId, avatarUrl, fantasyTeamName);
-
-    // If name is provided, this is a User Signup operation: write user to Supabase 'users' table
-    if (name) {
+    // For signup, create/verify the Supabase Auth account before writing the
+    // local server profile. This prevents a local account being created when
+    // the email is already registered or the password is incorrect.
+    if (name && isSupabaseConfigured) {
       await signupUserToSupabase(email, password, name, favoriteTeamId, avatarUrl, fantasyTeamName);
     }
+
+    // Verify server database availability and save the user on the server
+    const user = await api.loginUser(email, name, favoriteTeamId, avatarUrl, fantasyTeamName, password);
 
     currentUserRef.current = user;
     setCurrentUser(user);
@@ -465,7 +469,7 @@ export default function App() {
     
     // Always route directly to the Matches page (the primary Match Center) post-login
     setActiveTab('matches');
-    await loadData();
+    void loadData();
   };
 
   const handleUpdateProfile = async (data: Partial<UserAccount> & { email: string }) => {
@@ -504,6 +508,7 @@ export default function App() {
         title: 'Error',
         message: err.message || 'Failed to mark notification read',
         type: 'admin_alert',
+        eventType: 'Published News',
         timestamp: new Date().toISOString(),
         read: false
       }, 5000);
@@ -520,6 +525,7 @@ export default function App() {
         title: 'Error',
         message: err.message || 'Failed to mark all notifications read',
         type: 'admin_alert',
+        eventType: 'Published News',
         timestamp: new Date().toISOString(),
         read: false
       }, 5000);
@@ -536,6 +542,7 @@ export default function App() {
         title: 'Error',
         message: err.message || 'Failed to clear notifications',
         type: 'admin_alert',
+        eventType: 'Published News',
         timestamp: new Date().toISOString(),
         read: false
       }, 5000);
@@ -594,6 +601,7 @@ export default function App() {
           title: 'Error',
           message: err.message || 'Failed to save theme preference',
           type: 'admin_alert',
+          eventType: 'Published News',
           timestamp: new Date().toISOString(),
           read: false
         }, 5000);
@@ -629,6 +637,7 @@ export default function App() {
           title: 'Error',
           message: err.message || 'Failed to save notification preference',
           type: 'admin_alert',
+          eventType: 'Published News',
           timestamp: new Date().toISOString(),
           read: false
         }, 5000);
@@ -749,30 +758,8 @@ export default function App() {
         <main className="w-full max-w-lg md:max-w-3xl lg:max-w-5xl xl:max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-safe-nav space-y-6 sm:space-y-8">
           <AdDisplay advertisements={advertisements} position="top" />
           
-          {isLoading || !isOnline ? (
-            <div className="fixed inset-0 z-[10000] bg-[#800020] flex items-center justify-center p-4">
-              <img 
-                src="https://i.postimg.cc/hjmBHkfN/08469fba-3b41-4117-964b-745b2eca53f4-20260726-052311-0000.png" 
-                alt="Epe Premier League" 
-                loading="eager" 
-                fetchPriority="high"
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  if (target.src !== '/logo.png') {
-                    target.src = '/logo.png';
-                  }
-                }}
-                style={{
-                  width: '200px',
-                  height: 'auto',
-                  objectFit: 'contain',
-                  zIndex: 10,
-                  display: 'block',
-                  margin: 'auto',
-                  background: 'transparent'
-                }}
-              />
-            </div>
+          {isLoading ? (
+            <TabContentSkeleton tab={activeTab} isDark={isDark} />
           ) : (
             <>
               {/* TAB 1: MATCHES & LIVE DASHBOARD */}

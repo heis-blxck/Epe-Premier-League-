@@ -16,7 +16,12 @@ import {
   Camera,
   KeyRound,
   Send,
-  ArrowLeft
+  ArrowLeft,
+  AlertTriangle,
+  X,
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface MandatoryLoginGateProps {
@@ -46,6 +51,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [selectedAvatar, setSelectedAvatar] = useState<string>(AVATAR_PRESETS[0].url);
@@ -94,8 +100,10 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const formPassword = new FormData(e.currentTarget).get('password');
+    const password = typeof formPassword === 'string' ? formPassword : passwordInput;
     if (!emailInput.trim() || !emailInput.includes('@')) {
       setErrorMsg('Please enter a valid email address.');
       return;
@@ -106,6 +114,14 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
         return;
       }
     }
+    if (!password) {
+      setErrorMsg('Please enter your password.');
+      return;
+    }
+    if (authMode === 'signup' && password.length < 6) {
+      setErrorMsg('Password must be at least 6 characters long.');
+      return;
+    }
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
@@ -115,7 +131,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
         authMode === 'signup' ? (selectedTeam || undefined) : undefined,
         authMode === 'signup' ? selectedAvatar : undefined,
         undefined,
-        passwordInput.trim() || undefined
+        password
       );
     } catch (err: any) {
       console.error("User Signup/Auth Error in MandatoryLoginGate:", err);
@@ -138,7 +154,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
     setForgotSuccessMsg(null);
     try {
       const res = await api.forgotPassword(emailInput.trim());
-      setForgotSuccessMsg(res.message || 'Password recovery instructions and instant login link sent successfully!');
+      setForgotSuccessMsg(res.message || 'Password recovery request received. League Administration has been notified.');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to process password recovery');
     } finally {
@@ -196,12 +212,14 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
               </div>
 
               <p className="text-xs text-slate-400">
-                Enter your account email address below. We will instantly dispatch password recovery instructions and notify the Epe Premier League founder admin (<span className="text-amber-300 font-mono">itzjeda10@gmail.com</span>) to ensure you never lose account data.
+                Enter your account email address below. League Administration will be notified and will contact you at your registered email to help restore access to your account.
               </p>
 
               {errorMsg && (
-                <div className="p-3 bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-xl font-bold">
-                  {errorMsg}
+                <div className="p-3 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs rounded-xl font-bold flex items-start gap-2.5 animate-[shake_0.4s_ease-in-out]">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span className="flex-1">{errorMsg}</span>
+                  <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 shrink-0 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                 </div>
               )}
 
@@ -210,14 +228,14 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
                   <p>{forgotSuccessMsg}</p>
                   <button
                     type="button"
-                    onClick={async () => {
-                      try {
-                        await onLogin(emailInput.trim());
-                      } catch (e) {}
+                    onClick={() => {
+                      setIsForgotPassword(false);
+                      setForgotSuccessMsg(null);
+                      setPasswordInput('');
                     }}
                     className="w-full mt-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black py-2 rounded-lg text-xs cursor-pointer shadow"
                   >
-                    Instantly Log In Now
+                    Back to Sign In
                   </button>
                 </div>
               )}
@@ -288,8 +306,10 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
               </div>
 
               {errorMsg && (
-                <div className="p-3 bg-rose-950/80 border border-rose-800 text-rose-200 text-xs rounded-xl font-bold">
-                  {errorMsg}
+                <div className="p-3 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs rounded-xl font-bold flex items-start gap-2.5 animate-[shake_0.4s_ease-in-out]">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span className="flex-1">{errorMsg}</span>
+                  <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 shrink-0 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
                 </div>
               )}
 
@@ -422,23 +442,42 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
                   </div>
                   <div className="relative">
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
+                      name="password"
+                      required
+                      minLength={authMode === 'signup' ? 6 : undefined}
+                      autoComplete={authMode === 'signin' ? 'current-password' : 'new-password'}
                       placeholder="••••••••"
                       value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-3 text-sm font-bold text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                      onChange={(e) => {
+                        setPasswordInput(e.target.value);
+                        if (errorMsg) setErrorMsg(null);
+                      }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-12 py-3 text-sm font-bold text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-amber-400 focus:outline-none"
                     />
                     <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(visible => !visible)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      aria-pressed={showPassword}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-amber-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {authMode === 'signup' ? 'Use at least 6 characters.' : 'Enter the password linked to your account.'}
+                  </p>
                 </div>
 
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full bg-gradient-to-r from-[#800020] via-[#881337] to-[#FBB931] hover:brightness-110 text-slate-950 font-black py-3.5 rounded-xl text-sm transition-all shadow-xl shadow-[#800020]/25 flex items-center justify-center gap-2 cursor-pointer border border-[#FFE3B3]/40"
+                  className="w-full bg-gradient-to-r from-[#800020] via-[#881337] to-[#FBB931] hover:brightness-110 text-slate-950 font-black py-3.5 rounded-xl text-sm transition-all shadow-xl shadow-[#800020]/25 flex items-center justify-center gap-2 cursor-pointer border border-[#FFE3B3]/40 disabled:opacity-70 disabled:cursor-not-allowed"
                 >
                   {isSubmitting ? (
-                    <span>Authenticating Account...</span>
+                    <><Loader2 className="w-4 h-4 animate-spin" /><span>Authenticating Account...</span></>
                   ) : (
                     <>
                       <span>{authMode === 'signin' ? 'Sign In to Portal' : 'Create Account & Proceed'}</span>

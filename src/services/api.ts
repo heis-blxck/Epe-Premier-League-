@@ -357,15 +357,20 @@ export const api = {
   },
 
   // User Accounts & Login Deck
-  async loginUser(email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string): Promise<UserAccount> {
-    const res = await fetch('/api/users/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, name, favoriteTeamId, avatarUrl, fantasyTeamName })
-    });
+  async loginUser(email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string): Promise<UserAccount> {
+    let res: Response;
+    try {
+      res = await fetch('/api/users/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name, favoriteTeamId, avatarUrl, fantasyTeamName, password })
+      });
+    } catch {
+      throw new Error('Unable to reach the server. Please check your internet connection and try again.');
+    }
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to login');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Login failed. Please check your credentials.');
     }
     return res.json();
   },
@@ -543,9 +548,9 @@ export const api = {
       homeWinVotes: 0,
       drawVotes: 0,
       awayWinVotes: 0,
-      homeWinPercent: 33,
-      drawPercent: 34,
-      awayWinPercent: 33,
+      homeWinPercent: 0,
+      drawPercent: 0,
+      awayWinPercent: 0,
       userVote: null
     };
 

@@ -58,7 +58,7 @@ export const FantasyLeagueView: React.FC<FantasyLeagueViewProps> = ({
   );
   const [regManagerUsername, setRegManagerUsername] = useState<string>(currentUser.name || '');
   const [regFantasyTeamName, setRegFantasyTeamName] = useState<string>(currentUser.fantasyTeamName || `${currentUser.name || 'Manager'}'s XI`);
-  const [regFavoriteTeam, setRegFavoriteTeam] = useState<string>(currentUser.favoriteTeamId || teams[0]?.id || 'team-1');
+  const [regFavoriteTeam, setRegFavoriteTeam] = useState<string>(currentUser.favoriteTeamId || teams[0]?.id || '');
   const [regError, setRegError] = useState<string | null>(null);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [teamNameError, setTeamNameError] = useState<string | null>(null);
