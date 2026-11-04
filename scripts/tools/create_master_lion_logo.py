@@ -128,7 +128,7 @@ svg_content = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" w
 </svg>
 '''
 
-with open('logo_master.svg', 'w') as f:
+with open('assets/brand/logo_master.svg', 'w') as f:
     f.write(svg_content)
 
 print("SVG master lion profile created.")

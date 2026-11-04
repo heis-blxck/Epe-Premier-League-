@@ -114,14 +114,14 @@ svg_content = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" w
 </svg>
 '''
 
-with open('logo_master.svg', 'w') as f:
+with open('assets/brand/logo_master.svg', 'w') as f:
     f.write(svg_content)
 
 print("SVG created successfully")
 
 # Convert to PNG and JPG
-subprocess.run(["convert", "-background", "none", "logo_master.svg", "public/logo.png"], check=True)
-subprocess.run(["convert", "-background", "#800020", "logo_master.svg", "public/logo.jpg"], check=True)
+subprocess.run(["convert", "-background", "none", "assets/brand/logo_master.svg", "public/logo.png"], check=True)
+subprocess.run(["convert", "-background", "#800020", "assets/brand/logo_master.svg", "public/logo.jpg"], check=True)
 subprocess.run(["cp", "public/logo.png", "dist/logo.png"], check=False)
 subprocess.run(["cp", "public/logo.jpg", "dist/logo.jpg"], check=False)
 
