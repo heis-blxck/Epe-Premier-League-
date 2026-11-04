@@ -1,1 +1,0 @@
-{"error":"The API is not available on this static Netlify deployment. Host server.ts somewhere and proxy /api/* to it (see netlify.toml)."}

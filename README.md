@@ -6,9 +6,9 @@ fantasy football, news, match administration, and supporter accounts.
 ## Tech stack
 
 - **Frontend:** React 19, TypeScript, Vite 6, Tailwind CSS 4
-- **Backend:** Express (`server.ts`) with a Vite middleware dev server
+- **Backend:** Express (`server/app.ts`) with a Vite middleware dev server
 - **Data / auth:** Supabase (Postgres, Auth)
-- **Hosting:** Netlify for the static frontend; Express for the API
+- **Hosting:** Netlify (static frontend + Express API as a Netlify Function)
 
 ## Project structure
 
@@ -17,7 +17,7 @@ fantasy football, news, match administration, and supporter accounts.
 ├── src/                     # React application
 │   ├── components/          # UI components and admin panels
 │   ├── hooks/               # Reusable React hooks
-│   ├── server/              # Server-side data store (imported by server.ts)
+│   ├── server/              # Server-side data store (imported by server/app.ts)
 │   ├── services/            # API client and data services
 │   ├── utils/               # Shared helpers (fantasy engine, clocks, etc.)
 │   ├── App.tsx              # Application shell / routing
@@ -33,9 +33,13 @@ fantasy football, news, match administration, and supporter accounts.
 │   ├── maintenance/         # Data reset / wipe / sync scripts
 │   └── legacy/patches/      # Archived one-off patch scripts
 ├── tests/                   # Legacy test scripts and manual test pages
-├── server.ts                # Express API + production static server
+├── netlify/
+│   └── functions/api.ts     # Netlify Function entry for the Express API
+├── server/
+│   └── app.ts               # Express app / all /api routes
+├── server.ts                # Local dev + Node-host entry (Vite/static/listen)
 ├── index.html               # Vite HTML entry
-├── netlify.toml             # Netlify build / redirects / headers
+├── netlify.toml             # Netlify build / functions / redirects / headers
 └── vite.config.ts           # Vite configuration
 ```
 
@@ -75,16 +79,37 @@ npm run preview # preview the built frontend only
 
 ## Deployment
 
-### Netlify (frontend)
+### Netlify (frontend + API)
 
-`netlify.toml` builds the Vite frontend with `npx vite build` and publishes
-`dist/`. The SPA redirect keeps client-side routes working on refresh.
+`netlify.toml` builds the Vite frontend with `npx vite build`, publishes
+`dist/`, and bundles `netlify/functions/api.ts` with esbuild. The function
+wraps the Express app from `server/app.ts` with `serverless-http`, and the
+redirect below sends `/api/*` to it:
 
-> **API note:** Netlify serves the static frontend only. The app's `/api/*`
-> routes are implemented in `server.ts`, so the full app needs a running
-> Express backend. Point a Netlify proxy redirect for `/api/*` at that backend,
-> or host the Express server somewhere that supports Node processes. Until then,
-> API calls return a JSON 404 from `public/api-unavailable.json`.
+```toml
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+```
+
+Set these environment variables in **Netlify → Site configuration →
+Environment variables** (all environments, including Functions):
+
+| Variable | Purpose |
+| --- | --- |
+| `VITE_SUPABASE_URL` | Supabase project URL (client + function) |
+| `VITE_SUPABASE_ANON_KEY` | Supabase anon/publishable key (client + function) |
+| `APP_URL` | `https://epe-premier-league.netlify.app` — used in auth email links |
+
+`SUPABASE_URL` / `SUPABASE_ANON_KEY` are also accepted by the server, but the
+Vite client needs the `VITE_` variants at build time.
+
+The first request after a cold start waits for the initial Supabase hydration
+to finish. Later requests reuse the warm function instance. If the function
+cannot reach Supabase, check the Netlify function logs and the environment
+variables above.
 
 ### Express / Node host
 

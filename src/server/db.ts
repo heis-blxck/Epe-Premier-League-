@@ -215,6 +215,8 @@ export class DBStore extends EventEmitter {
   private consecutiveSyncFailures: number = 0;
   private maxConsecutiveSyncFailures: number = 5;
   private lastSyncFailureTime: number = 0;
+  private initialSyncPromise: Promise<void> = Promise.resolve();
+  private pendingWrites: Promise<void> = Promise.resolve();
 
   constructor() {
     super();
@@ -255,6 +257,28 @@ export class DBStore extends EventEmitter {
       fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
     } catch (e) {
       // Ignore EROFS in deployed environment
+    }
+  }
+
+  /**
+   * Resolves once the first Supabase -> memory hydration has finished.
+   * Serverless functions must await this before serving requests, otherwise a
+   * cold start can answer from the seed data before the database is loaded.
+   */
+  public ready(): Promise<void> {
+    return this.initialSyncPromise;
+  }
+
+  /**
+   * Serverless functions can be frozen as soon as the HTTP response is sent.
+   * Route responses call this first so queued Supabase upserts/deletes finish
+   * before the invocation ends.
+   */
+  public async flush(): Promise<void> {
+    try {
+      await this.pendingWrites;
+    } catch (err: any) {
+      console.warn('Supabase write flush notice:', String(err?.message || err).slice(0, 150));
     }
   }
 
@@ -329,8 +353,13 @@ export class DBStore extends EventEmitter {
   }
 
   private ensureDataDir() {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+    } catch {
+      // Netlify Functions run on a read-only filesystem. Supabase is the
+      // source of truth in that environment; local JSON is only a dev cache.
     }
   }
 
@@ -375,7 +404,7 @@ export class DBStore extends EventEmitter {
 
     if (isSupabaseConfigured) {
         this.isFirestoreSynced = true;
-        this.syncFromFirestore().then(() => {
+        this.initialSyncPromise = this.syncFromFirestore().then(() => {
             this.startFirestorePolling();
         }).catch(err => {
             console.log('Supabase sync initial load skipped or failed:', err.message);
@@ -669,10 +698,14 @@ export class DBStore extends EventEmitter {
          
          if (promises.length > 0) {
              console.log(`[Supabase Write] Persisting ${promises.length} modified record(s) to Supabase...`);
-             Promise.all(promises).catch(err => {
-                 const errMsg = err?.message || err?.error?.message || String(err);
-                 console.warn('Supabase batch write notice:', errMsg.slice(0, 150));
-             });
+              const batch = Promise.all(promises)
+                  .then(() => undefined)
+                  .catch(err => {
+                      const errMsg = err?.message || err?.error?.message || String(err);
+                      console.warn('Supabase batch write notice:', errMsg.slice(0, 150));
+                  });
+              // Chain batches so a later request cannot overtake an earlier one.
+              this.pendingWrites = this.pendingWrites.then(() => batch);
          }
       }
     } catch (e) {

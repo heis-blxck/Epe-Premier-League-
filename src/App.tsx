@@ -356,7 +356,19 @@ export default function App() {
       }
     } catch(e) {}
 
+    // Netlify Functions cannot hold an SSE stream open. The 45-second data
+    // refresh below also refreshes notifications, so skip the stream there.
+    if (window.location.hostname.endsWith('.netlify.app') || window.location.hostname.endsWith('.netlify.com')) {
+      return;
+    }
+
     const sse = new EventSource('/api/notifications/stream');
+
+    // If the stream fails (for example on another serverless host), stop
+    // reconnecting; polling still keeps notifications up to date.
+    sse.onerror = () => {
+      sse.close();
+    };
     
     sse.onmessage = async (event) => {
       try {
