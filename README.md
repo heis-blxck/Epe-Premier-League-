@@ -83,7 +83,8 @@ npm run preview # preview the built frontend only
 > **API note:** Netlify serves the static frontend only. The app's `/api/*`
 > routes are implemented in `server.ts`, so the full app needs a running
 > Express backend. Point a Netlify proxy redirect for `/api/*` at that backend,
-> or host the Express server somewhere that supports Node processes.
+> or host the Express server somewhere that supports Node processes. Until then,
+> API calls return a JSON 404 from `public/api-unavailable.json`.
 
 ### Express / Node host
 

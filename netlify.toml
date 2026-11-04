@@ -8,6 +8,20 @@
 [build.environment]
   NODE_VERSION = "22"
 
+# The Express API is not part of the static Netlify build. Return a clear JSON
+# 404 for API calls instead of the SPA HTML. To enable the full app on Netlify,
+# host server.ts on a Node host and add a proxy redirect like this:
+#
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://your-api-host.example.com/api/:splat"
+#   status = 200
+#   force = true
+[[redirects]]
+  from = "/api/*"
+  to = "/api-unavailable.json"
+  status = 404
+
 # SPA fallback so client-side routes survive a refresh / direct link.
 [[redirects]]
   from = "/*"
