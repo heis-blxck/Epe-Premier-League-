@@ -109,7 +109,9 @@ Vite client needs the `VITE_` variants at build time.
 The first request after a cold start waits for the initial Supabase hydration
 to finish. Later requests reuse the warm function instance. If the function
 cannot reach Supabase, check the Netlify function logs and the environment
-variables above.
+variables above. After deploying with the variables set, open
+`/api/health`: it reports `supabase: "configured"` and live row counts. If it
+reports `"missing"`, the function does not have the variables.
 
 ### Express / Node host
 

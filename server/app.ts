@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { db } from '../src/server/db';
+import { isSupabaseConfigured } from '../src/supabase';
 import { createClient, type User as SupabaseAuthUser, type Session as SupabaseSession } from '@supabase/supabase-js';
 import type { UserAccount } from '../src/types';
 
@@ -249,8 +250,19 @@ export function createApp() {
     next();
   });
 
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", time: (/* @__PURE__ */ new Date()).toISOString() });
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      time: (/* @__PURE__ */ new Date()).toISOString(),
+      supabase: isSupabaseConfigured ? "configured" : "missing",
+      auth: isAuthConfigured ? "configured" : "missing",
+      counts: {
+        teams: db.getTeams().length,
+        players: db.getPlayers().length,
+        admins: db.getAdmins().length,
+        users: db.getUsers().length
+      }
+    });
   });
   
   app.get("/api/ratings", (req, res) => {
