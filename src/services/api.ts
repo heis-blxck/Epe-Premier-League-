@@ -1,4 +1,49 @@
+import { supabase, isSupabaseConfigured } from '../supabase';
 import { Team, Player, Match, MatchEvent, NewsArticle, LeagueStats, AdminUser, UserAccount, AppNotification, AppSettings, MatchStats, FantasySquad, MiniLeague, MatchPredictionStats, PredictionType, MatchLineup, Advertisement, FixtureChatMessage, PredictorLeaderboardEntry, ScorePredictionRecord } from '../types';
+
+export class ApiError extends Error {
+  code?: string;
+  status?: number;
+  constructor(message: string, code?: string, status?: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export type AuthSessionTokens = { access_token: string; refresh_token: string };
+export type LoginResult =
+  | { user: UserAccount; session: AuthSessionTokens | null }
+  | { pendingConfirmation: true; email: string; message: string };
+
+export interface LoginRequest {
+  mode: 'signin' | 'signup';
+  email: string;
+  password: string;
+  name?: string;
+  favoriteTeamId?: string;
+  avatarUrl?: string;
+  fantasyTeamName?: string;
+}
+
+async function authJson(res: Response, fallbackMsg: string): Promise<any> {
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(body.error || fallbackMsg, body.code, res.status);
+  return body;
+}
+
+/** Authorization header carrying the signed-in user's Supabase access token, if any. */
+async function authHeaders(): Promise<Record<string, string>> {
+  if (!isSupabaseConfigured) return {};
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 async function throwApiError(res: Response, fallbackMsg: string): Promise<never> {
   const errData = await res.json().catch(() => ({}));
@@ -336,43 +381,53 @@ export const api = {
   async appointAdmin(adminData: Partial<AdminUser>): Promise<AdminUser> {
     const res = await fetch('/api/admins', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify(adminData)
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to appoint admin');
-    }
-    return res.json();
+    return authJson(res, 'Failed to appoint admin');
   },
 
   async dismissAdmin(email: string): Promise<void> {
     const res = await fetch(`/api/admins/${encodeURIComponent(email)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: { ...(await authHeaders()) }
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to dismiss admin');
-    }
+    await authJson(res, 'Failed to dismiss admin');
   },
 
   // User Accounts & Login Deck
-  async loginUser(email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string): Promise<UserAccount> {
+  async loginUser(request: LoginRequest): Promise<LoginResult> {
     let res: Response;
     try {
       res = await fetch('/api/users/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, name, favoriteTeamId, avatarUrl, fantasyTeamName, password })
+        body: JSON.stringify(request)
       });
     } catch {
-      throw new Error('Unable to reach the server. Please check your internet connection and try again.');
+      throw new ApiError('Unable to reach the server. Please check your internet connection and try again.', 'NETWORK');
     }
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Login failed. Please check your credentials.');
-    }
-    return res.json();
+    return authJson(res, request.mode === 'signup' ? 'Could not create your account. Please try again.' : 'Sign in failed. Please check your details.');
+  },
+
+  /** Turns a Supabase access token (from an email link) into the app profile. */
+  async restoreSession(accessToken: string): Promise<UserAccount> {
+    const res = await fetch('/api/users/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: '{}'
+    });
+    const body = await authJson(res, 'Could not restore your session.');
+    return body.user;
+  },
+
+  async resendConfirmation(email: string): Promise<{ success: boolean; message: string }> {
+    const res = await fetch('/api/users/resend-confirmation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    return authJson(res, 'Could not resend the confirmation email.');
   },
 
   async checkAvailability(username?: string, teamName?: string, email?: string): Promise<{ usernameAvailable: boolean; teamNameAvailable: boolean; usernameError?: string; teamNameError?: string }> {

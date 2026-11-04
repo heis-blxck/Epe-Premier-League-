@@ -15,6 +15,30 @@ const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || getEnvVar('SUPABA
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
+export type AuthRedirectInfo = {
+  /** 'signup' | 'recovery' | 'magiclink' | 'invite' | 'email_change' ... */
+  type: string | null;
+  error: string | null;
+};
+
+/**
+ * Supabase email links (confirm sign-up, reset password) land back on the app
+ * with details in the URL hash. The Supabase client consumes and clears that
+ * hash on startup, so capture it first.
+ */
+function readAuthRedirect(): AuthRedirectInfo | null {
+  if (typeof window === 'undefined' || !window.location) return null;
+  const raw = `${window.location.hash || ''}`.replace(/^#/, '');
+  const query = new URLSearchParams(window.location.search || '');
+  const params = new URLSearchParams(raw);
+  const type = params.get('type') || query.get('type');
+  const error = params.get('error_description') || query.get('error_description') || params.get('error') || query.get('error');
+  if (!type && !error && !params.get('access_token')) return null;
+  return { type, error: error ? error.replace(/\+/g, ' ') : null };
+}
+
+export const initialAuthRedirect: AuthRedirectInfo | null = readAuthRedirect();
+
 if (!isSupabaseConfigured) {
   console.warn('Supabase environment variables (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY) are not set.');
 }

@@ -203,6 +203,19 @@ export const Header: React.FC<HeaderProps> = ({
               <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isRefreshing ? 'animate-spin text-amber-400' : ''}`} />
             </button>
 
+            {/* Admin Command Center shortcut (admins only) */}
+            {isAdmin && activeTab !== 'admin' && (
+              <button
+                onClick={() => setActiveTab('admin')}
+                className="flex items-center gap-1 p-2 sm:px-2.5 sm:py-1.5 rounded-xl text-[10px] sm:text-xs font-black bg-slate-950 text-amber-300 border border-amber-400/70 hover:border-amber-300 transition-colors cursor-pointer shadow-sm shrink-0"
+                title="Open Admin Command Center"
+                aria-label="Open Admin Command Center"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden sm:inline uppercase tracking-wider">Admin</span>
+              </button>
+            )}
+
             {/* User Profile Pill / Login Button */}
             <button
               onClick={onOpenAuthDeck}

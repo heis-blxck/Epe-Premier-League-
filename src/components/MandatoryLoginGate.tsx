@@ -21,15 +21,24 @@ import {
   X,
   Loader2,
   Eye,
-  EyeOff
+  EyeOff,
+  MailCheck,
+  RefreshCw,
+  CheckCircle2
 } from 'lucide-react';
 
 interface MandatoryLoginGateProps {
   teams: Team[];
   admins: AdminUser[];
-  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string) => Promise<void>;
+  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string) => Promise<{ pendingConfirmation: true; email: string; message: string } | void>;
   theme: ThemeMode;
   settings?: AppSettings | null;
+  /** Message to show above the form (e.g. after an email link was opened). */
+  notice?: { tone: 'success' | 'error'; text: string } | null;
+  /** True when the person arrived from a "reset password" email link. */
+  isPasswordRecovery?: boolean;
+  onSetNewPassword?: (newPassword: string) => Promise<void>;
+  onCancelPasswordRecovery?: () => void;
 }
 
 const AVATAR_PRESETS = [
@@ -45,7 +54,11 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
   admins,
   onLogin,
   theme,
-  settings
+  settings,
+  notice,
+  isPasswordRecovery = false,
+  onSetNewPassword,
+  onCancelPasswordRecovery
 }) => {
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -58,6 +71,12 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [forgotSuccessMsg, setForgotSuccessMsg] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{ email: string; message: string } | null>(null);
+  const [resendStatus, setResendStatus] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const [isResending, setIsResending] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [recoveryDone, setRecoveryDone] = useState(false);
 
   const handleCustomAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -125,7 +144,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
-      await onLogin(
+      const result = await onLogin(
         emailInput.trim(), 
         authMode === 'signup' ? nameInput.trim() || undefined : undefined, 
         authMode === 'signup' ? (selectedTeam || undefined) : undefined,
@@ -133,11 +152,23 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
         undefined,
         password
       );
+      if (result && result.pendingConfirmation) {
+        setResendStatus(null);
+        setPendingConfirmation({ email: result.email, message: result.message });
+        setPasswordInput('');
+      }
     } catch (err: any) {
       console.error("User Signup/Auth Error in MandatoryLoginGate:", err);
-      const codeStr = err?.code ? `[${err.code}] ` : '';
+      if (err?.code === 'EMAIL_NOT_CONFIRMED') {
+        setResendStatus(null);
+        setPendingConfirmation({ email: emailInput.trim().toLowerCase(), message: err.message });
+        return;
+      }
+      if (err?.code === 'USER_EXISTS') {
+        setAuthMode('signin');
+      }
       const msgStr = err?.message || (typeof err === 'string' ? err : 'Authentication failed.');
-      setErrorMsg(`${codeStr}${msgStr}`);
+      setErrorMsg(msgStr);
     } finally {
       setIsSubmitting(false);
     }
@@ -154,13 +185,58 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
     setForgotSuccessMsg(null);
     try {
       const res = await api.forgotPassword(emailInput.trim());
-      setForgotSuccessMsg(res.message || 'Password recovery request received. League Administration has been notified.');
+      setForgotSuccessMsg(res.message || 'If an account exists for that email, a password reset link is on its way.');
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to process password recovery');
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const handleResendConfirmation = async () => {
+    if (!pendingConfirmation) return;
+    setIsResending(true);
+    setResendStatus(null);
+    try {
+      const res = await api.resendConfirmation(pendingConfirmation.email);
+      setResendStatus({ tone: 'success', text: res.message || 'A new confirmation link has been sent.' });
+    } catch (err: any) {
+      setResendStatus({ tone: 'error', text: err?.message || 'Could not resend the confirmation email.' });
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleNewPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      setErrorMsg('Password must be at least 6 characters long.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setErrorMsg('The two passwords do not match.');
+      return;
+    }
+    if (!onSetNewPassword) return;
+    setIsSubmitting(true);
+    setErrorMsg(null);
+    try {
+      await onSetNewPassword(newPassword);
+      setRecoveryDone(true);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Could not update your password. The link may have expired — request a new one.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const errorBanner = errorMsg && (
+    <div className="p-3 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs rounded-xl font-bold flex items-start gap-2.5 animate-[shake_0.4s_ease-in-out]">
+      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+      <span className="flex-1">{errorMsg}</span>
+      <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 shrink-0 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+    </div>
+  );
 
   return (
     <div className="app-viewport-height bg-slate-950 text-slate-100 flex flex-col justify-between selection:bg-[#800020] selection:text-amber-300 font-sans relative overflow-y-auto pt-safe pb-safe px-safe ios-scroll">
@@ -191,7 +267,132 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
         {/* Clean Auth Form Container */}
         <div className="max-w-md w-full mx-auto bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 backdrop-blur-md">
           
-          {isForgotPassword ? (
+          {notice && !pendingConfirmation && !isPasswordRecovery && (
+            <div className={`p-3 text-xs rounded-xl font-bold flex items-start gap-2.5 border ${
+              notice.tone === 'success'
+                ? 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
+                : 'bg-rose-950/90 border-rose-700 text-rose-200'
+            }`}>
+              {notice.tone === 'success'
+                ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                : <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />}
+              <span className="flex-1">{notice.text}</span>
+            </div>
+          )}
+
+          {isPasswordRecovery ? (
+            <div className="space-y-5 animate-fadeIn">
+              <div className="flex items-center gap-2 text-amber-400 font-extrabold text-sm pb-3 border-b border-slate-800">
+                <KeyRound className="w-5 h-5" />
+                <span>Choose a New Password</span>
+              </div>
+              {errorBanner}
+              {recoveryDone ? (
+                <p className="text-xs text-emerald-300 font-bold">Password updated. Signing you in…</p>
+              ) : (
+                <form onSubmit={handleNewPasswordSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 uppercase mb-1">New Password</label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        required
+                        minLength={6}
+                        value={newPassword}
+                        onChange={(e) => { setNewPassword(e.target.value); if (errorMsg) setErrorMsg(null); }}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-12 py-3 text-sm font-bold text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                        placeholder="At least 6 characters"
+                      />
+                      <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(visible => !visible)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-amber-300 rounded cursor-pointer"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 uppercase mb-1">Confirm New Password</label>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="new-password"
+                      required
+                      value={confirmNewPassword}
+                      onChange={(e) => { setConfirmNewPassword(e.target.value); if (errorMsg) setErrorMsg(null); }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-bold text-slate-100 placeholder:text-slate-600 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                      placeholder="Type it again"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="w-full bg-[#800020] hover:bg-rose-900 text-amber-300 border border-rose-800 font-black py-3.5 rounded-xl text-sm transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
+                  >
+                    {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    <span>{isSubmitting ? 'Saving…' : 'Save New Password & Sign In'}</span>
+                  </button>
+                  {onCancelPasswordRecovery && (
+                    <button
+                      type="button"
+                      onClick={onCancelPasswordRecovery}
+                      className="w-full text-xs font-bold text-slate-400 hover:text-white flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" /> Back to Sign In
+                    </button>
+                  )}
+                </form>
+              )}
+            </div>
+          ) : pendingConfirmation ? (
+            <div className="space-y-5 animate-fadeIn text-center">
+              <div className="mx-auto w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/40 flex items-center justify-center">
+                <MailCheck className="w-7 h-7 text-amber-300" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-lg font-black text-white">Confirm your email</h2>
+                <p className="text-xs text-slate-300 leading-relaxed">{pendingConfirmation.message}</p>
+              </div>
+
+              {resendStatus && (
+                <div className={`p-3 text-xs rounded-xl font-bold border text-left ${
+                  resendStatus.tone === 'success'
+                    ? 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
+                    : 'bg-rose-950/90 border-rose-700 text-rose-200'
+                }`}>
+                  {resendStatus.text}
+                </div>
+              )}
+
+              <div className="grid gap-2">
+                <button
+                  type="button"
+                  onClick={handleResendConfirmation}
+                  disabled={isResending}
+                  className="w-full bg-slate-950 hover:bg-slate-800 text-amber-300 border border-slate-700 font-black py-3 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                >
+                  {isResending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  <span>{isResending ? 'Sending…' : 'Resend confirmation email'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingConfirmation(null);
+                    setResendStatus(null);
+                    setAuthMode('signin');
+                    setErrorMsg(null);
+                  }}
+                  className="w-full bg-amber-400 hover:bg-amber-300 text-slate-950 font-black py-3 rounded-xl text-xs flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  <span>I've confirmed — Sign In</span>
+                </button>
+              </div>
+            </div>
+          ) : isForgotPassword ? (
             <div className="space-y-5 animate-fadeIn">
               <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                 <div className="flex items-center gap-2 text-amber-400 font-extrabold text-sm">
@@ -212,16 +413,10 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
               </div>
 
               <p className="text-xs text-slate-400">
-                Enter your account email address below. League Administration will be notified and will contact you at your registered email to help restore access to your account.
+                Enter the email you signed up with and we'll send you a link to choose a new password. Open the link on this device.
               </p>
 
-              {errorMsg && (
-                <div className="p-3 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs rounded-xl font-bold flex items-start gap-2.5 animate-[shake_0.4s_ease-in-out]">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span className="flex-1">{errorMsg}</span>
-                  <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 shrink-0 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
-                </div>
-              )}
+              {errorBanner}
 
               {forgotSuccessMsg && (
                 <div className="p-4 bg-emerald-950/80 border border-emerald-600 text-emerald-200 text-xs rounded-xl font-bold space-y-2">
@@ -264,7 +459,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
                   className="w-full bg-[#800020] hover:bg-rose-900 text-amber-300 border border-rose-800 font-black py-3.5 rounded-xl text-sm transition-all shadow-xl flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Send className="w-4 h-4" />
-                  <span>{isSubmitting ? 'Sending Recovery Instructions...' : 'Recover Account Access'}</span>
+                  <span>{isSubmitting ? 'Sending Reset Link...' : 'Email Me a Reset Link'}</span>
                 </button>
               </form>
             </div>
@@ -305,13 +500,7 @@ export const MandatoryLoginGate: React.FC<MandatoryLoginGateProps> = ({
                 </button>
               </div>
 
-              {errorMsg && (
-                <div className="p-3 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs rounded-xl font-bold flex items-start gap-2.5 animate-[shake_0.4s_ease-in-out]">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  <span className="flex-1">{errorMsg}</span>
-                  <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200 shrink-0 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
-                </div>
-              )}
+              {errorBanner}
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>

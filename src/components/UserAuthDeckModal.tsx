@@ -59,7 +59,7 @@ interface UserAuthDeckModalProps {
   teams: Team[];
   admins: AdminUser[];
   isAdmin?: boolean;
-  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string) => Promise<void>;
+  onLogin: (email: string, name?: string, favoriteTeamId?: string, avatarUrl?: string, fantasyTeamName?: string, password?: string) => Promise<{ pendingConfirmation: true; email: string; message: string } | void>;
   onUpdateProfile: (data: Partial<UserAccount> & { email: string }) => Promise<void>;
   onLogout: () => void;
   onDeleteAccount?: (email: string) => Promise<void>;
@@ -319,7 +319,7 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
     setIsSubmitting(true);
     setStatusMsg(null);
     try {
-      await onLogin(
+      const result = await onLogin(
         emailInput.trim(), 
         authMode === 'signup' ? nameInput.trim() || undefined : undefined, 
         authMode === 'signup' ? (selectedTeam || undefined) : undefined,
@@ -327,15 +327,18 @@ export const UserAuthDeckModal: React.FC<UserAuthDeckModalProps> = ({
         undefined,
         password
       );
+      if (result && result.pendingConfirmation) {
+        setStatusMsg(result.message);
+        return;
+      }
       if (onNavigateToTab) onNavigateToTab('matches');
       setStatusMsg('Successfully authenticated!');
       setViewMode('profile');
       closeModal();
     } catch (err: any) {
       console.error("User Auth/Signup Error:", err);
-      const codeStr = err?.code ? `[${err.code}] ` : '';
       const msgStr = err?.message || (typeof err === 'string' ? err : 'Authentication failed');
-      setStatusMsg(`${codeStr}${msgStr}`);
+      setStatusMsg(msgStr);
     } finally {
       setIsSubmitting(false);
     }

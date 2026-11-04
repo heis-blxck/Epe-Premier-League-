@@ -1394,6 +1394,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {isSuperAdmin && (
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { setActivePanel(5); setAdminTab('admins'); }}
+              className={`font-black text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 cursor-pointer border shadow ${
+                adminTab === 'admins'
+                  ? 'bg-amber-400 text-slate-950 border-amber-300'
+                  : 'bg-slate-950 text-amber-300 border-amber-400/60 hover:border-amber-300'
+              }`}
+              title="Appoint or dismiss administrators"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Manage Admins</span>
+            </button>
             {isResettingFantasy === 'confirming' ? (
               <div className="flex items-center gap-2 bg-rose-950 p-2 rounded-xl border border-rose-700">
                 <span className="text-[11px] font-bold text-rose-200 px-1">Wipe fantasy test data?</span>

@@ -4,53 +4,225 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import { DBStore } from './src/server/db';
-import { createClient, type User as SupabaseAuthUser } from '@supabase/supabase-js';
+import { createClient, type User as SupabaseAuthUser, type Session as SupabaseSession } from '@supabase/supabase-js';
+import type { UserAccount } from './src/types';
 
-// Supabase client for server-side password validation
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
-const serverSupabase = supabaseUrl && supabaseAnonKey
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false
-      }
-    })
-  : null;
+// ---------------------------------------------------------------------------
+// Supabase Auth helpers
+// ---------------------------------------------------------------------------
+// Supabase Auth is the source of truth for passwords. The server talks to it
+// with the public (anon/publishable) key, so a fresh, stateless client is
+// created per request to avoid sessions leaking between concurrent sign-ins.
+const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
+const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+const isAuthConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
-const MIN_PASSWORD_LENGTH = 6;
-
-function mapSupabaseAuthError(
-  error: { message?: string } | null | undefined,
-  fallback: string
-): { status: number; error: string } {
-  const message = error?.message?.trim() || 'Authentication failed.';
-  const lower = message.toLowerCase();
-
-  if (lower.includes('invalid login') || lower.includes('invalid credentials') || lower.includes('wrong password')) {
-    return { status: 401, error: "Incorrect password. Please try again or use 'Forgot Password'." };
-  }
-  if (lower.includes('email not confirmed')) {
-    return { status: 401, error: 'Email not yet confirmed. Please check your inbox.' };
-  }
-  if (lower.includes('too many requests') || lower.includes('rate limit') || lower.includes('too many')) {
-    return { status: 429, error: 'Too many attempts. Please wait a moment and try again.' };
-  }
-  if (lower.includes('invalid email') || lower.includes('unable to validate email')) {
-    return { status: 400, error: 'Please enter a valid email address.' };
-  }
-  if (lower.includes('password')) {
-    return { status: 400, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.` };
-  }
-
-  return { status: 401, error: `${fallback}: ${message}` };
+function createAuthClient() {
+  if (!isAuthConfigured) return null;
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      flowType: 'implicit'
+    }
+  });
 }
 
+const MIN_PASSWORD_LENGTH = 6;
+const AUTH_NOT_CONFIGURED = {
+  status: 503,
+  code: 'AUTH_NOT_CONFIGURED',
+  error: 'Sign-in is not configured on this server (missing Supabase URL/key). Please contact the league administrator.'
+};
+
+type AuthFailure = { status: number; code: string; error: string };
+
+function describeAuthError(error: any): AuthFailure {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').trim();
+  const lower = message.toLowerCase();
+  const status = Number(error?.status || 0);
+
+  if (code === 'invalid_credentials' || lower.includes('invalid login credentials')) {
+    return { status: 401, code: 'INVALID_CREDENTIALS', error: 'Incorrect email or password.' };
+  }
+  if (code === 'email_not_confirmed' || lower.includes('email not confirmed')) {
+    return {
+      status: 403,
+      code: 'EMAIL_NOT_CONFIRMED',
+      error: 'Your email address has not been confirmed yet. Open the confirmation link we emailed you (check your spam folder too), then sign in.'
+    };
+  }
+  if (code === 'user_already_exists' || code === 'email_exists' || lower.includes('already registered') || lower.includes('already been registered')) {
+    return { status: 409, code: 'USER_EXISTS', error: 'An account with this email already exists. Please sign in instead.' };
+  }
+  if (code === 'weak_password') {
+    return { status: 400, code: 'WEAK_PASSWORD', error: message || `Please choose a stronger password (at least ${MIN_PASSWORD_LENGTH} characters).` };
+  }
+  if (code === 'email_address_invalid' || lower.includes('invalid email') || lower.includes('unable to validate email')) {
+    return { status: 400, code: 'INVALID_EMAIL', error: 'Please enter a valid email address.' };
+  }
+  if (code === 'over_email_send_rate_limit' || lower.includes('email rate limit')) {
+    return {
+      status: 429,
+      code: 'EMAIL_RATE_LIMIT',
+      error: 'We could not send the email because the hourly email limit has been reached. Please try again later.'
+    };
+  }
+  if (code === 'signup_disabled' || lower.includes('signups not allowed')) {
+    return { status: 403, code: 'SIGNUP_DISABLED', error: 'New sign-ups are currently turned off. Please contact the league administrator.' };
+  }
+  if (code.startsWith('over_') || status === 429 || lower.includes('rate limit') || lower.includes('too many')) {
+    return { status: 429, code: 'RATE_LIMITED', error: 'Too many attempts. Please wait a minute and try again.' };
+  }
+  if (status === 0 || error?.name === 'AuthRetryableFetchError' || lower.includes('fetch failed')) {
+    return { status: 503, code: 'AUTH_UNREACHABLE', error: 'Could not reach the sign-in service. Please check your connection and try again.' };
+  }
+  return {
+    status: status >= 400 && status < 600 ? status : 400,
+    code: 'AUTH_ERROR',
+    error: message || 'Authentication failed. Please try again.'
+  };
+}
+
+/** Base URL that confirmation / password-reset emails should send people back to. */
+function getAppOrigin(req: express.Request): string {
+  const origin = req.get('origin');
+  if (origin && /^https?:\/\//i.test(origin)) return origin.replace(/\/+$/, '');
+  const appUrl = (process.env.APP_URL || '').trim();
+  if (/^https?:\/\//i.test(appUrl)) return appUrl.replace(/\/+$/, '');
+  const proto = String(req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim();
+  return `${proto}://${req.get('host')}`;
+}
+
+function getBearerToken(req: express.Request): string {
+  const header = req.get('authorization') || '';
+  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+}
+
+function isDatabaseUnavailableError(err: any): boolean {
+  return String(err?.message || '').toLowerCase().includes('database temporarily unavailable');
+}
 
 const PORT = 3000;
 
 const db = new DBStore();
+
+// ---------------------------------------------------------------------------
+// Profile helpers (local/Supabase `users` table rows linked to Auth accounts)
+// ---------------------------------------------------------------------------
+function findProfileByEmail(email: string): UserAccount | undefined {
+  const target = email.trim().toLowerCase();
+  return db.getUsers().find((u) => (u.email || '').toLowerCase() === target);
+}
+
+/** Roles always come from the admin roster, never from what a client sends. */
+function roleForEmail(email: string): UserAccount['role'] {
+  const admin = db.getAdmins().find((a) => (a.email || '').toLowerCase() === email.toLowerCase());
+  return (admin?.role as UserAccount['role']) || 'fan';
+}
+
+function makeUniqueUsername(base: string, email: string): string {
+  const clean = (base || email.split('@')[0]).trim() || 'fan';
+  if (db.checkUsernameAvailable(clean, email)) return clean;
+  for (let i = 0; i < 20; i++) {
+    const candidate = `${clean}${Math.floor(100 + Math.random() * 900)}`;
+    if (db.checkUsernameAvailable(candidate, email)) return candidate;
+  }
+  return `${clean}${Date.now().toString().slice(-5)}`;
+}
+
+/**
+ * Saves a profile, but never lets a temporary database sync problem block
+ * someone who has already proven their password with Supabase Auth.
+ */
+function persistProfile(profile: Partial<UserAccount> & { email: string }): UserAccount {
+  try {
+    return db.saveUser(profile);
+  } catch (err: any) {
+    if (!isDatabaseUnavailableError(err)) throw err;
+    console.warn(`[auth] Profile for ${profile.email} not persisted (database sync unavailable); continuing with sign-in.`);
+    const email = profile.email.trim().toLowerCase();
+    return {
+      id: profile.id || `user-${Date.now()}`,
+      name: profile.name || email.split('@')[0],
+      notificationsEnabled: profile.notificationsEnabled ?? true,
+      themePreference: profile.themePreference || 'dark',
+      createdAt: profile.createdAt || new Date().toISOString(),
+      ...profile,
+      email,
+      role: roleForEmail(email)
+    } as UserAccount;
+  }
+}
+
+type ProfileDetails = {
+  name?: string;
+  favoriteTeamId?: string;
+  avatarUrl?: string;
+  fantasyTeamName?: string;
+};
+
+/** Links a verified Supabase Auth user to their app profile (creating it if needed). */
+function upsertProfileForAuthUser(authUser: SupabaseAuthUser, details: ProfileDetails = {}): UserAccount {
+  const email = String(authUser.email || '').trim().toLowerCase();
+  const existing = findProfileByEmail(email);
+  const meta = (authUser.user_metadata || {}) as Record<string, any>;
+
+  if (existing) {
+    return persistProfile({
+      ...existing,
+      email,
+      role: roleForEmail(email),
+      ...(details.name ? { name: details.name } : {}),
+      ...(details.favoriteTeamId ? { favoriteTeamId: details.favoriteTeamId } : {}),
+      ...(details.avatarUrl ? { avatarUrl: details.avatarUrl } : {}),
+      ...(details.fantasyTeamName ? { fantasyTeamName: details.fantasyTeamName } : {})
+    });
+  }
+
+  const favoriteTeamId = details.favoriteTeamId || (meta.favoriteTeamId ? String(meta.favoriteTeamId) : undefined);
+  return persistProfile({
+    id: authUser.id,
+    email,
+    name: makeUniqueUsername(details.name || String(meta.name || ''), email),
+    role: roleForEmail(email),
+    createdAt: authUser.created_at || new Date().toISOString(),
+    notificationsEnabled: true,
+    themePreference: 'dark',
+    ...(favoriteTeamId ? { favoriteTeamId } : {}),
+    ...(details.avatarUrl ? { avatarUrl: details.avatarUrl } : {}),
+    ...(details.fantasyTeamName ? { fantasyTeamName: details.fantasyTeamName } : {})
+  });
+}
+
+function sessionPayload(session: SupabaseSession | null | undefined) {
+  if (!session) return null;
+  return { access_token: session.access_token, refresh_token: session.refresh_token };
+}
+
+/** Express guard: the caller must send a valid Supabase access token for a Super Admin. */
+async function requireSuperAdmin(req: express.Request, res: express.Response): Promise<string | null> {
+  if (!isAuthConfigured) return 'local-dev'; // No auth backend configured (local development only)
+  const token = getBearerToken(req);
+  if (!token) {
+    res.status(401).json({ code: 'SESSION_REQUIRED', error: 'Please sign out and sign in again to confirm it is you, then retry.' });
+    return null;
+  }
+  const client = createAuthClient()!;
+  const { data, error } = await client.auth.getUser(token);
+  const email = String(data?.user?.email || '').toLowerCase();
+  if (error || !email) {
+    res.status(401).json({ code: 'SESSION_EXPIRED', error: 'Your session has expired. Please sign out and sign in again, then retry.' });
+    return null;
+  }
+  if (roleForEmail(email) !== 'super_admin') {
+    res.status(403).json({ code: 'FORBIDDEN', error: 'Only Super Admins can appoint or dismiss administrators.' });
+    return null;
+  }
+  return email;
+}
 
 async function startServer() {
 
@@ -709,8 +881,10 @@ async function startServer() {
   app.get("/api/admins", (req, res) => {
     res.json(db.getAdmins());
   });
-  app.post("/api/admins", (req, res) => {
+  app.post("/api/admins", async (req, res) => {
     try {
+      const actingEmail = await requireSuperAdmin(req, res);
+      if (!actingEmail) return;
       db.assertWritable();
       const email = req.body.email ? req.body.email.trim().toLowerCase() : "";
       if (!email || !email.includes("@")) {
@@ -728,7 +902,7 @@ async function startServer() {
           ? "official_league" 
           : "sub_admin")),
         appointedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        appointedBy: req.body.appointedBy || "Super Admin (itzjeda10@gmail.com)"
+        appointedBy: actingEmail === 'local-dev' ? (req.body.appointedBy || "Super Admin") : actingEmail
       };
       const saved = db.saveAdmin(newAdmin as any);
       res.json(saved);
@@ -736,8 +910,13 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.delete("/api/admins/:email", (req, res) => {
+  app.delete("/api/admins/:email", async (req, res) => {
     try {
+      const actingEmail = await requireSuperAdmin(req, res);
+      if (!actingEmail) return;
+      if (actingEmail !== 'local-dev' && actingEmail === String(req.params.email || '').trim().toLowerCase()) {
+        return res.status(400).json({ error: "You can't dismiss yourself. Ask another Super Admin." });
+      }
       db.assertWritable();
       db.deleteAdmin(req.params.email);
       res.json({ success: true });
@@ -892,154 +1071,218 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
+  // ------------------------------------------------------------------
+  // AUTH: sign in / sign up (one endpoint, `mode` decides)
+  // ------------------------------------------------------------------
   app.post("/api/users/login", async (req, res) => {
     try {
-      db.assertWritable();
       const email = req.body.email ? String(req.body.email).trim().toLowerCase() : "";
-      const password = req.body.password !== undefined && req.body.password !== null
-        ? String(req.body.password)
-        : undefined;
+      const password = req.body.password !== undefined && req.body.password !== null ? String(req.body.password) : "";
       const suppliedName = req.body.name ? String(req.body.name).trim() : "";
-      const isSignup = Boolean(suppliedName); // signup = name is provided
-
-      if (!email || !email.includes("@")) {
-        return res.status(400).json({ error: "Please enter a valid email address." });
-      }
-
-      if (!password) {
-        return res.status(400).json({ error: "Password is required." });
-      }
-
-      if (isSignup && password.length < MIN_PASSWORD_LENGTH) {
-        return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.` });
-      }
-
-      // Supabase Auth is the source of truth; local profiles can lag behind its
-      // users table while the database sync is running.
-      type AuthenticationResult =
-        | { user: SupabaseAuthUser; failure: null }
-        | { user: null; failure: { status: number; error: string } };
-      const authenticateWithSupabase = async (): Promise<AuthenticationResult> => {
-        if (!serverSupabase) {
-          return {
-            user: null,
-            failure: { status: 503, error: "Authentication is not configured. Please contact the league administrator." }
-          };
-        }
-
-        const { data, error } = await serverSupabase.auth.signInWithPassword({ email, password });
-        if (error) {
-          return { user: null, failure: mapSupabaseAuthError(error, "Sign in failed") };
-        }
-        if (!data?.user) {
-          return { user: null, failure: { status: 401, error: "Sign in failed. Please try again." } };
-        }
-        return { user: data.user, failure: null };
+      const mode: 'signin' | 'signup' = req.body.mode === 'signup' || req.body.mode === 'signin'
+        ? req.body.mode
+        : (suppliedName ? 'signup' : 'signin');
+      const details: ProfileDetails = {
+        name: suppliedName || undefined,
+        favoriteTeamId: req.body.favoriteTeamId ? String(req.body.favoriteTeamId).trim() : undefined,
+        avatarUrl: req.body.avatarUrl ? String(req.body.avatarUrl).trim() : undefined,
+        fantasyTeamName: req.body.fantasyTeamName ? String(req.body.fantasyTeamName).trim() : undefined
       };
 
-      // --- SIGN IN flow ---
-      if (!isSignup) {
-        const authentication = await authenticateWithSupabase();
-        if (authentication.failure) {
-          return res.status(authentication.failure.status).json({ error: authentication.failure.error });
-        }
-
-        const existing = db.getUsers().find((u) => u.email.toLowerCase() === email);
-        const authUser = authentication.user;
-        const user = db.saveUser({
-          ...(existing || {}),
-          id: existing?.id || authUser.id,
-          email: authUser.email || email,
-          name: existing?.name || String(authUser.user_metadata?.name || email.split("@")[0]),
-          role: existing?.role || "fan",
-          createdAt: existing?.createdAt || authUser.created_at || new Date().toISOString(),
-          notificationsEnabled: existing?.notificationsEnabled ?? true,
-          themePreference: existing?.themePreference || "dark",
-          ...(req.body.favoriteTeamId ? { favoriteTeamId: String(req.body.favoriteTeamId).trim() } : {}),
-          ...(req.body.avatarUrl ? { avatarUrl: String(req.body.avatarUrl).trim() } : {}),
-          ...(req.body.fantasyTeamName ? { fantasyTeamName: String(req.body.fantasyTeamName).trim() } : {})
-        });
-        return res.json(user);
+      if (!email || !email.includes("@")) {
+        return res.status(400).json({ code: 'INVALID_EMAIL', error: "Please enter a valid email address." });
+      }
+      if (!password) {
+        return res.status(400).json({ code: 'PASSWORD_REQUIRED', error: "Please enter your password." });
       }
 
-      // --- SIGN UP flow ---
-      const authentication = await authenticateWithSupabase();
-      if (authentication.failure) {
-        if (authentication.failure.status === 401 && db.getUsers().some((u) => u.email.toLowerCase() === email)) {
-          return res.status(401).json({
-            error: "An account with this email already exists. Please sign in with the correct password."
+      const client = createAuthClient();
+      if (!client) return res.status(AUTH_NOT_CONFIGURED.status).json(AUTH_NOT_CONFIGURED);
+
+      // --- SIGN IN ---------------------------------------------------
+      if (mode === 'signin') {
+        const { data, error } = await client.auth.signInWithPassword({ email, password });
+        if (error || !data?.user) {
+          const failure = describeAuthError(error);
+          if (failure.code === 'INVALID_CREDENTIALS') {
+            failure.error = findProfileByEmail(email)
+              ? "Incorrect password. If you haven't set a password since the app's new login system, tap \"Sign Up\" and register with this same email — your profile and role will be kept. Otherwise use \"Forgot Password\"."
+              : "Incorrect email or password. New here? Tap \"Sign Up\" to create an account.";
+          }
+          return res.status(failure.status).json(failure);
+        }
+        const user = upsertProfileForAuthUser(data.user);
+        return res.json({ user, session: sessionPayload(data.session) });
+      }
+
+      // --- SIGN UP ---------------------------------------------------
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({ code: 'WEAK_PASSWORD', error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.` });
+      }
+      if (!suppliedName) {
+        return res.status(400).json({ code: 'USERNAME_REQUIRED', error: "Please choose a username." });
+      }
+      if (!db.checkUsernameAvailable(suppliedName, email)) {
+        return res.status(409).json({ code: 'USERNAME_TAKEN', error: `Username '${suppliedName}' is already taken. Please choose a different one.` });
+      }
+      if (details.fantasyTeamName && !db.checkFantasyTeamNameAvailable(details.fantasyTeamName, email)) {
+        return res.status(409).json({ code: 'TEAM_NAME_TAKEN', error: `Fantasy team name '${details.fantasyTeamName}' is already taken.` });
+      }
+
+      // If the email already has a working account and the password matches,
+      // treat "Sign Up" as a sign-in so returning fans are never stuck.
+      const trySignInInstead = async () => {
+        const { data, error } = await client.auth.signInWithPassword({ email, password });
+        if (data?.user && !error) {
+          const user = upsertProfileForAuthUser(data.user, details);
+          return res.json({ user, session: sessionPayload(data.session) });
+        }
+        const failure = describeAuthError(error);
+        if (failure.code === 'INVALID_CREDENTIALS' || failure.code === 'AUTH_ERROR') {
+          return res.status(409).json({
+            code: 'USER_EXISTS',
+            error: 'An account with this email already exists. Please sign in, or use "Forgot Password" if you can\'t remember your password.'
           });
         }
-        return res.status(authentication.failure.status).json({ error: authentication.failure.error });
-      }
+        return res.status(failure.status).json(failure);
+      };
 
-      const existing = db.getUsers().find((u) => u.email.toLowerCase() === email);
-      if (existing) {
-        const user = db.saveUser({
-          ...existing,
-          name: suppliedName || existing.name,
-          ...(req.body.favoriteTeamId ? { favoriteTeamId: String(req.body.favoriteTeamId).trim() } : {}),
-          ...(req.body.avatarUrl ? { avatarUrl: String(req.body.avatarUrl).trim() } : {}),
-          ...(req.body.fantasyTeamName ? { fantasyTeamName: String(req.body.fantasyTeamName).trim() } : {})
-        });
-        return res.json(user);
-      }
-
-      // Signup already created the Supabase Auth account; create its local
-      // profile immediately rather than waiting for the background DB sync.
-      const newUser = db.saveUser({
-        id: authentication.user.id,
-        email: authentication.user.email || email,
-        name: suppliedName || String(authentication.user.user_metadata?.name || email.split("@")[0]),
-        role: "fan",
-        createdAt: authentication.user.created_at || new Date().toISOString(),
-        notificationsEnabled: true,
-        themePreference: req.body.themePreference === "light" ? "light" : "dark",
-        ...(req.body.favoriteTeamId ? { favoriteTeamId: String(req.body.favoriteTeamId).trim() } : {}),
-        ...(req.body.fantasyTeamName ? { fantasyTeamName: String(req.body.fantasyTeamName).trim() } : {}),
-        ...(req.body.avatarUrl ? { avatarUrl: String(req.body.avatarUrl).trim() } : {})
+      const { data, error } = await client.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: getAppOrigin(req),
+          data: {
+            name: suppliedName,
+            ...(details.favoriteTeamId ? { favoriteTeamId: details.favoriteTeamId } : {})
+          }
+        }
       });
-      return res.json(newUser);
+
+      if (error) {
+        const failure = describeAuthError(error);
+        if (failure.code === 'USER_EXISTS') return trySignInInstead();
+        return res.status(failure.status).json(failure);
+      }
+
+      // Email confirmation OFF: Supabase signs the new user straight in.
+      if (data.session && data.user) {
+        const user = upsertProfileForAuthUser(data.user, details);
+        return res.json({ user, session: sessionPayload(data.session) });
+      }
+
+      // Email confirmation ON + this email is already a confirmed account:
+      // Supabase hides that by returning a user with no identities.
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        return trySignInInstead();
+      }
+
+      // Email confirmation ON: account created, waiting for the link to be clicked.
+      // Pre-create a profile for brand-new emails so the chosen username, club and
+      // photo are ready; existing profiles are only touched after confirmation.
+      if (data.user && !findProfileByEmail(email)) {
+        try {
+          persistProfile({
+            id: data.user.id,
+            email,
+            name: suppliedName,
+            role: roleForEmail(email),
+            createdAt: data.user.created_at || new Date().toISOString(),
+            notificationsEnabled: true,
+            themePreference: 'dark',
+            ...(details.favoriteTeamId ? { favoriteTeamId: details.favoriteTeamId } : {}),
+            ...(details.avatarUrl ? { avatarUrl: details.avatarUrl } : {}),
+            ...(details.fantasyTeamName ? { fantasyTeamName: details.fantasyTeamName } : {})
+          });
+        } catch (profileErr: any) {
+          console.warn('[auth] Could not pre-create profile for pending signup:', profileErr?.message);
+        }
+      }
+
+      return res.status(202).json({
+        pendingConfirmation: true,
+        email,
+        message: `Almost done! We've sent a confirmation link to ${email}. Open it on this device to activate your account and you'll be signed in automatically. Check your spam folder if you don't see it.`
+      });
     } catch (err: any) {
-      res.status(400).json({ error: err.message });
+      console.error('[auth] /api/users/login failed:', err);
+      res.status(400).json({ code: 'AUTH_ERROR', error: err?.message || 'Authentication failed. Please try again.' });
+    }
+  });
+
+  // Exchange a Supabase access token (from an email confirmation or password
+  // reset link) for the matching app profile.
+  app.post("/api/users/session", async (req, res) => {
+    try {
+      const client = createAuthClient();
+      if (!client) return res.status(AUTH_NOT_CONFIGURED.status).json(AUTH_NOT_CONFIGURED);
+      const token = getBearerToken(req) || String(req.body?.accessToken || '');
+      if (!token) return res.status(401).json({ code: 'SESSION_REQUIRED', error: 'Missing session token.' });
+      const { data, error } = await client.auth.getUser(token);
+      if (error || !data?.user?.email) {
+        return res.status(401).json({ code: 'SESSION_EXPIRED', error: 'That link has expired. Please sign in with your email and password.' });
+      }
+      res.json({ user: upsertProfileForAuthUser(data.user) });
+    } catch (err: any) {
+      res.status(400).json({ code: 'AUTH_ERROR', error: err?.message || 'Could not restore your session.' });
+    }
+  });
+
+  app.post("/api/users/resend-confirmation", async (req, res) => {
+    try {
+      const email = req.body.email ? String(req.body.email).trim().toLowerCase() : "";
+      if (!email || !email.includes("@")) {
+        return res.status(400).json({ code: 'INVALID_EMAIL', error: "Please enter a valid email address." });
+      }
+      const client = createAuthClient();
+      if (!client) return res.status(AUTH_NOT_CONFIGURED.status).json(AUTH_NOT_CONFIGURED);
+      const { error } = await client.auth.resend({ type: 'signup', email, options: { emailRedirectTo: getAppOrigin(req) } });
+      if (error) {
+        const failure = describeAuthError(error);
+        return res.status(failure.status).json(failure);
+      }
+      res.json({ success: true, message: `A new confirmation link has been sent to ${email}.` });
+    } catch (err: any) {
+      res.status(500).json({ code: 'AUTH_ERROR', error: err?.message || 'Could not resend the confirmation email.' });
     }
   });
 
   app.post("/api/users/forgot-password", async (req, res) => {
     try {
-      db.assertWritable();
-      const email = req.body.email ? req.body.email.trim().toLowerCase() : "";
+      const email = req.body.email ? String(req.body.email).trim().toLowerCase() : "";
       if (!email || !email.includes("@")) {
-        return res.status(400).json({ error: "Valid email address is required for password recovery" });
+        return res.status(400).json({ code: 'INVALID_EMAIL', error: "Please enter a valid email address." });
       }
-      const existing = db.getUsers().find((u) => u.email.toLowerCase() === email);
-      if (!existing) {
-        return res.status(404).json({ error: "No user account found with this email address. Please sign up." });
+      const client = createAuthClient();
+      if (!client) return res.status(AUTH_NOT_CONFIGURED.status).json(AUTH_NOT_CONFIGURED);
+      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: getAppOrigin(req) });
+      if (error) {
+        const failure = describeAuthError(error);
+        if (failure.code === 'EMAIL_RATE_LIMIT' || failure.code === 'RATE_LIMITED' || failure.code === 'AUTH_UNREACHABLE') {
+          return res.status(failure.status).json(failure);
+        }
+        console.warn('[auth] resetPasswordForEmail notice:', error.message);
       }
-
-      await db.addNotification({
-        title: `🔑 Password Recovery Request`,
-        message: `Password recovery requested for user: ${email} (${existing.name}). Routed to League Administration.`,
-        type: 'admin_alert',
-        eventType: 'Published News'
-      });
-
+      // Same answer whether or not the email exists, so accounts can't be probed.
       res.json({
         success: true,
-        message: `Password recovery request received. League Administration has been notified and will contact you at ${email}.`
+        message: `If an account exists for ${email}, a password reset link is on its way. Open it on this device to choose a new password. If you never set a password after the login upgrade, use Sign Up instead.`
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ code: 'AUTH_ERROR', error: err?.message || 'Could not start password recovery.' });
     }
   });
+
   app.post("/api/users/profile", (req, res) => {
     try {
       db.assertWritable();
-      const email = req.body.email ? req.body.email.trim().toLowerCase() : "";
+      const email = req.body.email ? String(req.body.email).trim().toLowerCase() : "";
       if (!email) {
         return res.status(400).json({ error: "User email is required" });
       }
-      const updated = db.saveUser(req.body);
+      // Never accept role or id changes from the client — roles come from the admin roster.
+      const { role: _ignoredRole, id: _ignoredId, ...profileUpdate } = req.body || {};
+      const updated = db.saveUser({ ...profileUpdate, email, role: roleForEmail(email) });
       res.json(updated);
     } catch (err: any) {
       res.status(400).json({ error: err.message });

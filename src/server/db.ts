@@ -747,7 +747,9 @@ export class DBStore extends EventEmitter {
 
   public saveAdmin(admin: Partial<AdminUser>): AdminUser {
     this.assertWritable();
-    if (!this.data.admins) this.data.admins = INITIAL_ADMINS;
+    // An empty roster (e.g. after a sync returned no rows) falls back to the seeded
+    // admins in getAdmins(); keep them when the first new admin is appointed.
+    if (!this.data.admins || this.data.admins.length === 0) this.data.admins = [...INITIAL_ADMINS];
     const email = admin.email ? admin.email.toLowerCase().trim() : '';
     if (!email) throw new Error('Email is required to save admin.');
     const adminId = admin.id || `admin-${Date.now()}`;

@@ -4,8 +4,8 @@ import { useURLModal } from './hooks/useURLModal';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Match, Team, Player, NewsArticle, LeagueStats as LeagueStatsType, AdminUser, UserAccount, AppNotification, ThemeMode, AppSettings, Advertisement } from './types';
 import { api } from './services/api';
-import { signupUserToSupabase } from './services/userService';
-import { isSupabaseConfigured } from './supabase';
+import type { LoginResult } from './services/api';
+import { supabase, isSupabaseConfigured, initialAuthRedirect } from './supabase';
 import { AdDisplay } from './components/AdDisplay';
 import { Header } from './components/Header';
 import { EpeLogo } from './components/EpeLogo';
@@ -439,6 +439,15 @@ export default function App() {
   }, []);
 
   // User Auth Deck Handlers
+  const completeLogin = (user: UserAccount) => {
+    currentUserRef.current = user;
+    setCurrentUser(user);
+    if (user.themePreference) setTheme(user.themePreference);
+    // Always route directly to the Matches page (the primary Match Center) post-login
+    setActiveTab('matches');
+    void loadData();
+  };
+
   const handleLogin = async (
     email: string, 
     name?: string, 
@@ -446,30 +455,96 @@ export default function App() {
     avatarUrl?: string, 
     fantasyTeamName?: string,
     password?: string
-  ) => {
+  ): Promise<Extract<LoginResult, { pendingConfirmation: true }> | void> => {
     if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
       void Notification.requestPermission().catch(error => {
         console.warn('Unable to request notification permission:', error);
       });
     }
 
-    // For signup, create/verify the Supabase Auth account before writing the
-    // local server profile. This prevents a local account being created when
-    // the email is already registered or the password is incorrect.
-    if (name && isSupabaseConfigured) {
-      await signupUserToSupabase(email, password, name, favoriteTeamId, avatarUrl, fantasyTeamName);
+    // The server creates / verifies the Supabase Auth account and links the profile.
+    const result = await api.loginUser({
+      mode: name ? 'signup' : 'signin',
+      email,
+      password: password || '',
+      name,
+      favoriteTeamId,
+      avatarUrl,
+      fantasyTeamName
+    });
+
+    if ('pendingConfirmation' in result) {
+      return result; // The gate shows "check your email"
     }
 
-    // Verify server database availability and save the user on the server
-    const user = await api.loginUser(email, name, favoriteTeamId, avatarUrl, fantasyTeamName, password);
+    // Keep a Supabase session in the browser so admin actions can prove who is making them.
+    if (result.session && isSupabaseConfigured) {
+      await supabase.auth.setSession(result.session).catch(error => {
+        console.warn('Unable to store auth session:', error);
+      });
+    }
 
-    currentUserRef.current = user;
-    setCurrentUser(user);
-    if (user.themePreference) setTheme(user.themePreference);
-    
-    // Always route directly to the Matches page (the primary Match Center) post-login
-    setActiveTab('matches');
-    void loadData();
+    completeLogin(result.user);
+  };
+
+  // Email links (confirm account / reset password) bring people back here.
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState<boolean>(() => initialAuthRedirect?.type === 'recovery' && !initialAuthRedirect?.error);
+  const [authNotice, setAuthNotice] = useState<{ tone: 'success' | 'error'; text: string } | null>(() => {
+    if (initialAuthRedirect?.error) {
+      return {
+        tone: 'error',
+        text: /expired|invalid/i.test(initialAuthRedirect.error)
+          ? 'That email link is invalid or has expired. Sign in below, or request a new link.'
+          : initialAuthRedirect.error
+      };
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const { data: listener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true);
+    });
+
+    const redirectType = initialAuthRedirect?.type;
+    if (redirectType && redirectType !== 'recovery' && !initialAuthRedirect?.error) {
+      // Confirmation link clicked: sign the person straight in.
+      (async () => {
+        try {
+          const { data } = await supabase.auth.getSession();
+          const token = data?.session?.access_token;
+          if (!token) throw new Error('No session in link');
+          const user = await api.restoreSession(token);
+          completeLogin(user);
+          setAuthNotice(null);
+        } catch (err) {
+          console.warn('Email confirmation sign-in failed:', err);
+          setAuthNotice({ tone: 'success', text: 'Your email is confirmed. Please sign in with your email and password.' });
+        }
+      })();
+    }
+
+    return () => listener?.subscription?.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSetNewPassword = async (newPassword: string) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw new Error(error.message || 'Could not update your password.');
+    const { data } = await supabase.auth.getSession();
+    setIsPasswordRecovery(false);
+    if (data?.session?.access_token) {
+      const user = await api.restoreSession(data.session.access_token);
+      completeLogin(user);
+    } else {
+      setAuthNotice({ tone: 'success', text: 'Password updated. Please sign in with your new password.' });
+    }
+  };
+
+  const handleCancelPasswordRecovery = () => {
+    setIsPasswordRecovery(false);
+    if (isSupabaseConfigured) void supabase.auth.signOut({ scope: 'local' }).catch(() => {});
   };
 
   const handleUpdateProfile = async (data: Partial<UserAccount> & { email: string }) => {
@@ -480,6 +555,7 @@ export default function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('epl_active_user');
+    if (isSupabaseConfigured) void supabase.auth.signOut({ scope: 'local' }).catch(() => {});
     currentUserRef.current = null;
     setCurrentUser(null);
     if (activeTab === 'admin') {
@@ -489,6 +565,7 @@ export default function App() {
 
   const handleDeleteAccount = async (email: string) => {
     await api.deleteAccount(email);
+    if (isSupabaseConfigured) void supabase.auth.signOut({ scope: 'local' }).catch(() => {});
     currentUserRef.current = null;
     setCurrentUser(null);
     if (activeTab === 'admin') {
@@ -686,7 +763,7 @@ export default function App() {
   const isDark = theme === 'dark';
 
   // GATE 1: MANDATORY APP SIGN UP / LOGIN GATE (To access the app & create profile)
-  if (!currentUser) {
+  if (!currentUser || isPasswordRecovery) {
     return (
       <MandatoryLoginGate
         teams={teams}
@@ -694,6 +771,10 @@ export default function App() {
         onLogin={handleLogin}
         theme={theme}
         settings={settings}
+        notice={authNotice}
+        isPasswordRecovery={isPasswordRecovery}
+        onSetNewPassword={handleSetNewPassword}
+        onCancelPasswordRecovery={handleCancelPasswordRecovery}
       />
     );
   }
